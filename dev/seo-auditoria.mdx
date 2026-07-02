@@ -1,0 +1,641 @@
+---
+title: "Auditoría SEO: Canónicos, Imágenes y Datos Estructurados"
+sidebarTitle: "SEO"
+description: "Hallazgos y fixes SEO de esgmexico.net: bug de canonicals duplicados, imágenes Sanity CDN sin dimensiones, meta descriptions truncadas y JSON-LD faltante."
+---
+
+Esta página documenta los hallazgos de la auditoría técnica SEO realizada el 2 de julio de 2026 sobre el sitio `esgmexico.net` (Astro v6.4.7 + Sanity CMS + Vercel). La auditoría analizó las rutas `/`, `/blog`, `/servicios-esg` y un artículo de blog representativo. Los hallazgos se agrupan en tres niveles de prioridad: **P0 críticos** (rompen la indexación), **P1 altos** (degradan rendimiento y snippets), y **P2 medios** (oportunidades de mejora en datos estructurados y on-page). Los issues P0 deben resolverse antes de cualquier otra optimización.
+
+## Resumen ejecutivo
+
+El sitio migró correctamente a Astro con generación estática (HTML completo servido al crawler), pero arrastra un **bug crítico de generación de URLs canónicas que afecta a todo el blog**, una **inconsistencia de host www vs no-www** que divide señales de autoridad, e **imágenes servidas a tamaño original desde Sanity CDN** (hasta 7,900×5,269 px) que degradan el rendimiento. Adicionalmente faltan datos estructurados JSON-LD, los meta descriptions del blog se autogeneran truncados, y hay deuda menor en Open Graph y H1 duplicados.
+
+**Orden de ataque:** P0 (canonicals) → P0 (host único + redirects) → P1 (imágenes Sanity) → P1 (meta descriptions) → P2 (JSON-LD, og:type, H1).
+
+---
+
+<Tabs>
+  <Tab title="P0 — Críticos">
+
+    ## P0-1 · Canonical, og:url y og:image malformados en todo el blog
+
+    <Warning>
+      Este bug invalida los canonicals de todos los artículos del blog. Google recibe URLs del tipo `https://esgmexico.nethttps://esgmexico.net/blog/...` y no puede indexar el contenido correctamente. **Resolver antes de cualquier otra tarea SEO.**
+    </Warning>
+
+    ### Evidencia observada
+
+    En `/blog` y en cada artículo, las URLs se generan con doble concatenación del dominio:
+
+    ```html
+    <link rel="canonical" href="https://esgmexico.nethttps://esgmexico.net/blog">
+    <meta property="og:url" content="https://esgmexico.nethttps://esgmexico.net/blog/marzo2026_formula_1...">
+    <meta property="og:image" content="https://esgmexico.nethttps://cdn.sanity.io/images/[project]/production/[hash].jpg">
+    ```
+
+    Las páginas principales (home, servicios) **no** tienen este bug — sus canonicals son válidos. El bug vive en el layout o componente SEO usado por las rutas del blog.
+
+    ### Impacto
+
+    1. Google recibe canonicals inválidos en los ~28+ artículos → indexación degradada, riesgo de que Google elija canonicals propios o trate el contenido como duplicado.
+    2. `og:url` roto → los crawlers de redes sociales no consolidan señales de compartido en la URL real.
+    3. `og:image` roto → **al compartir artículos en LinkedIn/WhatsApp/Facebook no aparece imagen de preview**, con impacto directo en CTR.
+
+    ### Causa raíz
+
+    Concatenación de `Astro.site` (string absoluto) con una URL que ya es absoluta. Patrón típico del bug:
+
+    ```astro
+    ---
+    // ❌ INCORRECTO
+    // Astro.url ya es una URL absoluta; Astro.site también lo es.
+    // La concatenación produce "https://esgmexico.nethttps://esgmexico.net/..."
+    const canonical = `${Astro.site}${Astro.url}`;
+    const ogImage   = `${Astro.site}${post.mainImage.url}`;
+    ---
+    ```
+
+    ### Fix: usar `new URL()` para construir URLs seguras
+
+    ```astro
+    ---
+    // ✅ CORRECTO — new URL() acepta una base y nunca duplica el origen
+
+    // Canonical: toma solo el pathname de la URL actual y lo combina con el site
+    const canonicalURL = new URL(Astro.url.pathname, Astro.site);
+
+    // og:image: si la URL ya es absoluta (Sanity CDN o http externo), usarla tal cual.
+    // Solo prefijar el sitio si es una ruta relativa local (ej. "/og-default.jpg").
+    function absoluteImage(img: string | undefined, fallback = "/og-default.jpg") {
+      const src = img ?? fallback;
+      return src.startsWith("http") ? src : new URL(src, Astro.site).href;
+    }
+
+    const ogImage = absoluteImage(post?.mainImage?.url);
+    ---
+    <link rel="canonical" href={canonicalURL} />
+    <meta property="og:url"   content={canonicalURL} />
+    <meta property="og:image" content={ogImage} />
+    ```
+
+    Comandos para localizar todas las ocurrencias del bug antes de corregirlas:
+
+    ```bash
+    # Encontrar concatenaciones de Astro.site sin new URL()
+    grep -rn "Astro.site" src/ | grep -v "new URL"
+
+    # Detectar usos directos de Astro.url (sin .pathname)
+    grep -rn 'Astro\.url[^.]' src/
+    ```
+
+    ### Implementación actual en `SEO.astro`
+
+    El componente `src/components/SEO.astro` ya implementa el patrón correcto con `new URL()`:
+
+    ```astro
+    ---
+    // src/components/SEO.astro — fragmento relevante
+    const siteUrl = Astro.site
+      ? Astro.site.href.replace(/\/$/, "")
+      : "https://www.esgmexico.net";
+
+    // Acepta canonical absoluto o relativo; fallback al pathname actual
+    const canonicalUrl = canonical
+      ? canonical.startsWith("http")
+        ? canonical
+        : `${siteUrl}${canonical}`
+      : `${siteUrl}${Astro.url.pathname}`;
+
+    // Acepta URL absoluta de Sanity CDN o ruta local relativa
+    const ogImageUrl = ogImage.startsWith("http")
+      ? ogImage
+      : `${siteUrl}${ogImage}`;
+    ---
+    ```
+
+    Verificar que **todos** los layouts del blog pasen `canonical` y `ogImage` correctos a este componente, sin hacer pre-concatenación propia antes de pasarlos.
+
+    ### Criterios de aceptación
+
+    - `curl -s https://www.esgmexico.net/blog | grep canonical` devuelve una sola URL válida sin duplicación.
+    - Todos los artículos tienen `canonical`, `og:url` y `og:image` válidos.
+    - Validar 2–3 artículos en [opengraph.xyz](https://www.opengraph.xyz) o el Post Inspector de LinkedIn: el preview muestra imagen.
+    - El `sitemap.xml` no contiene URLs con doble dominio (comprobar con `grep "nethttps" dist/sitemap.xml`).
+
+    ---
+
+    ## P0-2 · Inconsistencia de host www vs no-www + trailing slash
+
+    <Warning>
+      Los canonicals de home y servicios apuntan a `https://esgmexico.net` (sin www) mientras el sitio sirve en `https://www.esgmexico.net`. Google puede indexar ambos hosts, dividir la autoridad de enlace y desperdiciar crawl budget en redirects o contenido duplicado.
+    </Warning>
+
+    ### Evidencia observada
+
+    - El sitio **sirve** en `https://www.esgmexico.net`.
+    - Los **canonicals** de home y servicios apuntan a `https://esgmexico.net` (sin `www`).
+    - El canonical de `/servicios-esg` incluye trailing slash (`/servicios-esg/`) mientras los enlaces internos usan `/servicios-esg` (sin slash).
+
+    ### Fix
+
+    **1. Alinear `astro.config.mjs`** con el host canónico elegido (`www`):
+
+    ```js
+    // astro.config.mjs
+    export default defineConfig({
+      site: "https://www.esgmexico.net", // ✅ con www, sin trailing slash
+      trailingSlash: "never",            // ✅ política uniforme de slash
+      adapter: vercel(),
+      // ...
+    });
+    ```
+
+    **2. Redirect 301 en `vercel.json`** — ya implementado correctamente:
+
+    ```json
+    {
+      "redirects": [
+        {
+          "source": "/:path*",
+          "has": [{ "type": "host", "value": "esgmexico.net" }],
+          "destination": "https://www.esgmexico.net/:path*",
+          "permanent": true
+        }
+      ]
+    }
+    ```
+
+    **3. Verificar en el dashboard de Vercel** que `esgmexico.net` esté configurado como **redirect** al dominio principal, no como alias que sirve contenido duplicado.
+
+    **4. Regenerar el sitemap** tras el fix para que use el host canónico con `www`.
+
+    ### Criterios de aceptación
+
+    - `curl -sI https://esgmexico.net/` devuelve `301` con `Location: https://www.esgmexico.net/`.
+    - `curl -sI https://esgmexico.net/blog` → 301 a la ruta equivalente en `www`.
+    - Todos los canonicals usan el mismo host y la misma política de slash que los enlaces internos.
+    - `grep -r "esgmexico.net" dist/ | grep -v "www.esgmexico"` no arroja resultados.
+
+  </Tab>
+
+  <Tab title="P1 — Altos">
+
+    ## P1-1 · Imágenes de Sanity servidas a tamaño original
+
+    <Note>
+      Imágenes de hasta 7,900×5,269 px se sirven como thumbnails de tarjeta de blog. El Sanity Image Pipeline puede redimensionarlas vía parámetros de URL sin modificar los archivos originales.
+    </Note>
+
+    ### Evidencia observada
+
+    Las tarjetas del listado de blog y las imágenes de artículos cargan URLs de Sanity CDN **sin parámetros de transformación**:
+
+    - Imagen JPG de **7,900×5,269 px** renderizada como thumbnail de tarjeta (peso estimado: varios MB).
+    - Múltiples WebP de 2,752×1,536 usadas como tarjetas de 400 px de ancho visible.
+
+    ### Impacto
+
+    - LCP degradado (probable >4s en móvil), consumo masivo de datos, score bajo en PageSpeed/Lighthouse.
+    - Sanity cobra por ancho de banda del CDN — se están pagando píxeles que ningún usuario ve.
+
+    ### Fix: función `sanityImg()` del cliente existente
+
+    El cliente Sanity en `src/lib/sanity.ts` ya expone `sanityImg()` y `sanitySrcset()`:
+
+    ```ts
+    // src/lib/sanity.ts — funciones de imagen ya disponibles
+
+    /** Aplica transformaciones del Sanity Image Pipeline a una URL del CDN */
+    export function sanityImg(
+      url: string | undefined,
+      opts: { w: number; h?: number; q?: number } = { w: 640 }
+    ): string {
+      if (!url || !url.includes("cdn.sanity.io")) return url ?? "";
+      const params = new URLSearchParams();
+      params.set("w", String(opts.w));
+      if (opts.h) {
+        params.set("h", String(opts.h));
+        params.set("fit", "crop");
+      }
+      params.set("auto", "format"); // convierte a WebP/AVIF según soporte del navegador
+      params.set("q", String(opts.q ?? 75));
+      return `${url}${url.includes("?") ? "&" : "?"}${params.toString()}`;
+    }
+
+    /** srcset con varios anchos para imágenes responsivas */
+    export function sanitySrcset(
+      url: string | undefined,
+      widths: number[] = [400, 640, 960]
+    ): string {
+      if (!url || !url.includes("cdn.sanity.io")) return "";
+      return widths.map((w) => `${sanityImg(url, { w })} ${w}w`).join(", ");
+    }
+    ```
+
+    Uso correcto en tarjetas del blog:
+
+    ```astro
+    ---
+    import { sanityImg, sanitySrcset } from "../lib/sanity";
+    ---
+
+    <!-- Thumbnail de tarjeta: 640×360, crop centrado, lazy -->
+    <img
+      src={sanityImg(post.mainImage?.url, { w: 640, h: 360 })}
+      srcset={sanitySrcset(post.mainImage?.url, [400, 640, 960])}
+      sizes="(max-width: 768px) 100vw, 400px"
+      width="640"
+      height="360"
+      loading="lazy"
+      decoding="async"
+      alt={post.mainImage?.alt ?? post.title}
+    />
+    ```
+
+    Para la imagen hero del artículo (above the fold, LCP candidate):
+
+    ```astro
+    <!-- Hero de artículo: ancho máximo 1200, eager + fetchpriority -->
+    <img
+      src={sanityImg(post.mainImage?.url, { w: 1200 })}
+      srcset={sanitySrcset(post.mainImage?.url, [600, 900, 1200])}
+      sizes="100vw"
+      width="1200"
+      height="630"
+      loading="eager"
+      fetchpriority="high"
+      decoding="async"
+      alt={post.mainImage?.alt ?? post.title}
+    />
+    ```
+
+    ### Criterios de aceptación
+
+    - Ninguna URL de `cdn.sanity.io` en el HTML generado carece del parámetro `w=` (verificar con `grep "cdn.sanity.io" dist/**/*.html | grep -v "w="`).
+    - Peso total de la página `/blog` < 1.5 MB (antes probable 15–30 MB).
+    - PageSpeed Insights móvil de `/blog`: LCP < 2.5s. Documentar el delta antes/después.
+
+    ---
+
+    ## P1-2 · Meta descriptions del blog autogeneradas, truncadas y con entidades HTML
+
+    <Note>
+      La description de los artículos concatena el título con los primeros caracteres del cuerpo, cortada a media palabra, con `&nbsp;` visible como texto. Esto es literalmente lo que Google muestra como snippet en resultados de búsqueda.
+    </Note>
+
+    ### Evidencia observada
+
+    ```
+    "Fórmula 1 y sostenibilidad: la nueva carrera tecnológica que inició en Australia
+    El pasado fin de semana... marcó un arranque que n"
+    ```
+
+    ### Fix: función `metaDescription()` en `src/lib/seo.ts`
+
+    La función `metaDescription()` en `src/lib/seo.ts` ya implementa el fix completo:
+
+    ```ts
+    // src/lib/seo.ts — implementación completa
+
+    function toPlainText(blocks: any[] | undefined): string {
+      if (!blocks) return "";
+      return blocks
+        .filter((b) => b._type === "block" && Array.isArray(b.children))
+        .map((b) => b.children.map((c: any) => c.text ?? "").join(""))
+        .join(" ");
+    }
+
+    function clean(text: string): string {
+      return text
+        .replace(/\u00a0|&nbsp;/g, " ") // elimina NBSP y entidades
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    function truncateAtWord(text: string, max = 155): string {
+      if (text.length <= max) return text;
+      // Corta en el último espacio antes de max chars, nunca a media palabra
+      return text.slice(0, max).replace(/\s+\S*$/, "") + "…";
+    }
+
+    export function metaDescription(post: {
+      title?: string;
+      excerpt?: string;
+      body?: any[];
+    }): string {
+      const stripTitle = (text: string): string => {
+        if (!text || !post.title) return text;
+        const title = clean(post.title);
+        if (text.toLowerCase().startsWith(title.toLowerCase())) {
+          return text.slice(title.length).replace(/^[\s:—–-]+/, "").trim();
+        }
+        return text;
+      };
+
+      let source = post.excerpt ? stripTitle(clean(post.excerpt)) : "";
+
+      // Excerpts migrados vienen auto-truncados a media palabra (sin puntuación final).
+      // En ese caso, el cuerpo completo da una descripción más limpia.
+      const looksTruncated = source !== "" && !/[.!?…»)]$/.test(source);
+      if (!source || looksTruncated) {
+        const fromBody = stripTitle(clean(toPlainText(post.body)));
+        if (fromBody) source = fromBody;
+      }
+
+      return truncateAtWord(source);
+    }
+    ```
+
+    Adicionalmente, agregar un campo `excerpt` en el schema de Sanity del documento `post` (string, máximo 160 caracteres, requerido para publicar) y redactar excerpts para los artículos existentes. Con `excerpt` disponible, `metaDescription()` lo usa directamente en lugar del fallback al cuerpo.
+
+    ### Criterios de aceptación
+
+    - Ninguna meta description contiene `&nbsp;` ni termina a media palabra.
+    - Longitud entre 70 y 160 caracteres en todos los artículos.
+    - La description no duplica el contenido del `<title>`.
+
+  </Tab>
+
+  <Tab title="P2 — Medios">
+
+    ## P2-1 · Ausencia de datos estructurados (JSON-LD)
+
+    <Note>
+      No se detectó ningún bloque `application/ld+json` en las páginas analizadas. Se desaprovechan resultados enriquecidos de artículos, panel de organización, SEO local y señales E-E-A-T de las autoras.
+    </Note>
+
+    ### Fix a) `Organization` / `ProfessionalService` — en el layout global
+
+    El componente `SEO.astro` ya incluye el schema de organización:
+
+    ```astro
+    ---
+    // src/components/SEO.astro — schema Organization ya implementado
+    const organizationSchema = {
+      "@context": "https://schema.org",
+      "@type": "ProfessionalService",
+      "name": "ESG México",
+      "alternateName": "Ugarte HRS y Asociados S.C.",
+      "url": siteUrl,
+      "logo": `${siteUrl}/logo/logo-esg.svg`,
+      "image": `${siteUrl}/logo/logo-esg.svg`,
+      "telephone": "+52 55 18 44 57 67",
+      "email": "buzon@esgmexico.net",
+      "address": {
+        "@type": "PostalAddress",
+        "streetAddress": "Ahumada Villalón 36, Lomas-Virreyes",
+        "addressLocality": "Lomas de Chapultepec IV Sección, Miguel Hidalgo",
+        "postalCode": "11000",
+        "addressRegion": "Ciudad de México",
+        "addressCountry": "MX"
+      },
+      "contactPoint": {
+        "@type": "ContactPoint",
+        "telephone": "+52 55 18 44 57 67",
+        "contactType": "customer service",
+        "areaServed": "MX",
+        "availableLanguage": "Spanish"
+      },
+      "sameAs": [
+        "https://www.linkedin.com/company/esg-mexico/",
+        "https://x.com/ESG_mex",
+        "https://www.instagram.com/esgmexico"
+      ]
+    };
+    ---
+
+    <script type="application/ld+json" set:html={JSON.stringify(organizationSchema)} />
+    ```
+
+    ### Fix b) `Article` — en el layout de post
+
+    ```astro
+    ---
+    // Layout de artículo — agregar schema Article
+    import { metaDescription } from "../lib/seo";
+    import { sanityImg } from "../lib/sanity";
+
+    const canonicalURL = new URL(Astro.url.pathname, Astro.site);
+
+    const articleSchema = {
+      "@context": "https://schema.org",
+      "@type": "Article",
+      "headline": post.title,
+      "description": metaDescription(post),
+      "image": sanityImg(post.mainImage?.url, { w: 1200 }),
+      "datePublished": post.publishedAt,
+      "dateModified": post._updatedAt ?? post.publishedAt,
+      "author": {
+        "@type": "Person",
+        "name": post.author.name,
+        "url": post.author.linkedin,
+        "jobTitle": post.author.role
+      },
+      "publisher": { "@id": "https://www.esgmexico.net/#organization" },
+      "mainEntityOfPage": canonicalURL.href
+    };
+    ---
+
+    <script type="application/ld+json" set:html={JSON.stringify(articleSchema)} />
+    ```
+
+    ### Fix c) `BreadcrumbList` — en artículos
+
+    ```astro
+    ---
+    const breadcrumbSchema = {
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        { "@type": "ListItem", "position": 1, "name": "Inicio",    "item": "https://www.esgmexico.net" },
+        { "@type": "ListItem", "position": 2, "name": "Blog",      "item": "https://www.esgmexico.net/blog" },
+        { "@type": "ListItem", "position": 3, "name": post.title,  "item": canonicalURL.href }
+      ]
+    };
+    ---
+    ```
+
+    ### Criterios de aceptación
+
+    - [validator.schema.org](https://validator.schema.org) y la prueba de resultados enriquecidos de Google pasan sin errores en home y en 2 artículos.
+    - `datePublished` coincide con la fecha visible del artículo.
+
+    ---
+
+    ## P2-2 · Open Graph incompleto en artículos
+
+    <Note>
+      Los artículos usan `og:type: website` en lugar de `article`, y omiten `article:published_time` y `article:author`. El componente `SEO.astro` ya soporta estos props; solo falta pasarlos desde el layout del post.
+    </Note>
+
+    El componente `SEO.astro` ya acepta y renderiza las props necesarias:
+
+    ```astro
+    ---
+    // src/components/SEO.astro — props soportadas para artículos
+    interface Props {
+      title: string;
+      description: string;
+      canonical?: string;
+      ogImage?: string;
+      noindex?: boolean;
+      ogType?: string;               // "website" (default) | "article"
+      articlePublishedTime?: string; // ISO date — solo para ogType="article"
+      articleAuthor?: string;        // Nombre de la autora
+    }
+    ---
+
+    <!-- Renders condicional en el componente -->
+    <meta property="og:type" content={ogType} />
+    {ogType === "article" && articlePublishedTime && (
+      <meta property="article:published_time" content={articlePublishedTime} />
+    )}
+    {ogType === "article" && articleAuthor && (
+      <meta property="article:author" content={articleAuthor} />
+    )}
+    ```
+
+    Uso correcto desde el layout de post:
+
+    ```astro
+    <SEO
+      title={post.title}
+      description={metaDescription(post)}
+      canonical={`/blog/${post.slug}`}
+      ogImage={post.mainImage?.url}
+      ogType="article"
+      articlePublishedTime={post.publishedAt}
+      articleAuthor={post.author?.name}
+    />
+    ```
+
+    Verificar también que `og-default.jpg` exista en `public/`, mida 1,200×630 px y pese menos de 300 KB (se usa como fallback en páginas sin imagen propia).
+
+    ---
+
+    ## P2-3 · H1 duplicado dentro del cuerpo de artículos
+
+    <Note>
+      El título del artículo se renderiza como H1 y además aparece repetido en negritas como primera línea del cuerpo Portable Text, porque viene así desde Sanity.
+    </Note>
+
+    ### Fix
+
+    **Opción a — editorial (preferida):** limpiar el primer bloque en los documentos de Sanity que repiten el título. Establecer lineamiento editorial: el título del artículo no debe repetirse como primera línea del cuerpo.
+
+    **Opción b — defensiva en código:** al renderizar el Portable Text, omitir el primer bloque si su texto plano coincide (normalizado) con `post.title`:
+
+    ```ts
+    // Filtrar el primer bloque si replica el título
+    function filterDuplicateH1(
+      blocks: any[],
+      title: string
+    ): any[] {
+      if (!blocks?.length) return blocks;
+      const normalize = (s: string) => s.toLowerCase().trim().replace(/\s+/g, " ");
+      const firstText = blocks[0]?.children?.map((c: any) => c.text).join("") ?? "";
+      if (normalize(firstText) === normalize(title)) {
+        return blocks.slice(1);
+      }
+      return blocks;
+    }
+    ```
+
+    ---
+
+    ## P2-4 · Alt texts de logos de clientes no descriptivos
+
+    <Note>
+      Los 24 logos de clientes en el home tienen `alt="Cliente 1"` ... `alt="Cliente 24"`. Reemplazar por el nombre real de cada empresa mejora SEO (asociación de marca) y cumple WCAG 1.1.1.
+    </Note>
+
+    Si los logos provienen de Sanity, agregar un campo `alt` o `name` al schema del documento correspondiente. Si son estáticos, hardcodear los nombres reales: `alt="Logo de [Nombre de empresa]"`.
+
+    ---
+
+    ## P2-5 · Convención de slugs del blog inconsistente
+
+    <Note>
+      Conviven slugs no descriptivos (`/blog/abril`), con guiones bajos (`marzo2026_formula_1...`) y con mayúsculas mezcladas. Para posts nuevos, adoptar `kebab-case` puro. Para posts existentes, **no cambiar slugs** sin implementar un redirect 301 por cada uno.
+    </Note>
+
+    Validación recomendada en el schema de Sanity para posts nuevos:
+
+    ```js
+    // studio/schemas/post.js — validación de slug
+    defineField({
+      name: "slug",
+      type: "slug",
+      validation: (Rule) =>
+        Rule.custom((slug) => {
+          if (!slug?.current) return "El slug es requerido";
+          if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug.current)) {
+            return "El slug debe usar kebab-case: solo minúsculas, números y guiones";
+          }
+          return true;
+        }),
+    })
+    ```
+
+  </Tab>
+</Tabs>
+
+---
+
+## Robots.txt y Sitemap
+
+El archivo `public/robots.txt` permite el crawl general y referencia el sitemap:
+
+```text public/robots.txt
+User-agent: *
+Allow: /
+
+Sitemap: https://www.esgmexico.net/sitemap.xml
+```
+
+El sitemap se genera dinámicamente en `src/pages/sitemap.xml.ts`, que combina páginas estáticas y artículos del blog obtenidos vía `getCollection("blog")`. Tras resolver P0-1 y P0-2, verificar que el sitemap resultante no contenga URLs con doble dominio:
+
+```bash
+# Verificar que el sitemap generado no tiene el bug de doble dominio
+grep "nethttps" dist/sitemap.xml && echo "BUG ENCONTRADO" || echo "OK"
+
+# Verificar que todos los URLs usan www
+grep -c "www.esgmexico.net" dist/sitemap.xml
+```
+
+<Note>
+  El sitemap cubre 10 páginas estáticas (home, nosotros, servicios, cumplimiento y sus sub-rutas, blog) más todos los artículos del blog con `lastmod` calculado desde el campo `date` de cada post. Enviar el sitemap en Google Search Console tras desplegar los fixes P0.
+</Note>
+
+---
+
+## Plan de ejecución
+
+<Steps>
+  <Step title="Sesión 1 — P0 (urgente, hoy)">
+    1. Localizar y corregir la concatenación de canonical/og:url/og:image con `grep -rn "Astro.site" src/ | grep -v "new URL"`.
+    2. Verificar que `astro.config.mjs` tenga `site: "https://www.esgmexico.net"` y `trailingSlash: "never"`.
+    3. Confirmar el redirect 301 no-www → www en `vercel.json`.
+    4. Build local + grep sobre `dist/` para validar que no queda ninguna URL con doble dominio.
+    5. Deploy + validar con `curl` y LinkedIn Post Inspector.
+  </Step>
+  <Step title="Sesión 2 — P1 (rendimiento)">
+    6. Usar `sanityImg()` y `sanitySrcset()` en todas las tarjetas del blog y heroes de artículos.
+    7. Agregar campo `excerpt` en Sanity + usar `metaDescription()` de `src/lib/seo.ts` en todos los layouts del blog.
+    8. Correr PageSpeed Insights antes/después y documentar el delta de LCP.
+  </Step>
+  <Step title="Sesión 3 — P2 (datos estructurados y on-page)">
+    9. Verificar que el JSON-LD de `SEO.astro` se renderiza en todas las páginas y agregar Article + BreadcrumbList en los layouts de post.
+    10. Pasar `ogType="article"`, `articlePublishedTime` y `articleAuthor` desde los layouts de blog.
+    11. Reemplazar alt texts de logos de clientes por nombres reales.
+    12. Activar validación de slug `kebab-case` en el schema de Sanity para posts nuevos.
+    13. Limpiar H1 duplicado (editorial o defensivo en código).
+  </Step>
+  <Step title="Sesión 4 — P3 (verificaciones y menores)">
+    14. Enviar el sitemap en Google Search Console y solicitar reindexación de páginas principales.
+    15. Auditar headers de seguridad en [securityheaders.com](https://securityheaders.com) — ya implementados en `vercel.json`.
+    16. Newsletter footer: agregar `<label>` y referencia al aviso de privacidad.
+    17. Ofuscar email `buzon@esgmexico.net` del footer contra harvesting de spam.
+    18. Verificar `aria-hidden="true"` en la navegación duplicada (desktop/móvil).
+  </Step>
+</Steps>

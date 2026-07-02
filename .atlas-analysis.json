@@ -1,0 +1,100 @@
+{
+  "projectType": "saas",
+  "projectName": "ESG México",
+  "projectDescription": "Sitio web corporativo de ESG México, consultoría en sostenibilidad estratégica que acompaña a empresas mexicanas en la integración de criterios ESG, cumplimiento regulatorio, informes de sostenibilidad y fundaciones empresariales.",
+  "theme": "willow",
+  "primaryColor": "#4c5473",
+  "lightColor": null,
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentación",
+        "groups": [
+          {
+            "group": "Introducción",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Servicios ESG",
+            "pages": [
+              "servicios/environmental",
+              "servicios/social",
+              "servicios/governance"
+            ]
+          },
+          {
+            "group": "Cumplimiento Regulatorio",
+            "pages": [
+              "cumplimiento/overview",
+              "cumplimiento/nom-035",
+              "cumplimiento/certificaciones"
+            ]
+          },
+          {
+            "group": "Sostenibilidad Financiera",
+            "pages": [
+              "financiero/overview",
+              "financiero/ifrs-s1-s2",
+              "financiero/due-diligence"
+            ]
+          },
+          {
+            "group": "Fundaciones Empresariales",
+            "pages": [
+              "fundaciones/overview",
+              "fundaciones/constitucion",
+              "fundaciones/casos-exito"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Desarrollo",
+        "groups": [
+          {
+            "group": "Stack Técnico",
+            "pages": [
+              "dev/stack",
+              "dev/configuracion",
+              "dev/cms-sanity"
+            ]
+          },
+          {
+            "group": "Despliegue y Operaciones",
+            "pages": [
+              "dev/deploy",
+              "dev/seo-auditoria",
+              "dev/variables-entorno"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Consultoría ESG integral: Environmental, Social y Governance",
+    "Cumplimiento regulatorio: NOM-035, ISO 14001, ISO 26000, EcoVadis, Empresas B",
+    "Sostenibilidad financiera: IFRS S1/S2, due diligence ESG, acceso a capital sostenible",
+    "Informes de sostenibilidad bajo estándares GRI, IFRS y SASB",
+    "Constitución y operación de fundaciones empresariales",
+    "Blog editorial con contenido ESG actualizado",
+    "CMS headless (Sanity) con webhook de redeployment en Vercel",
+    "Formulario de autoevaluación ESG con envío por correo electrónico",
+    "Integración de WhatsApp FAB con mensajes pre-llenados por contexto de página",
+    "Generación estática (Astro SSG) con adaptador Vercel"
+  ],
+  "publicApiSurface": [
+    "POST /api/autoevaluacion — recibe el formulario de autoevaluación ESG y envía resultados por email (nodemailer + SMTP Gmail)",
+    "GET /blog/[slug] — página dinámica de artículos del blog (Astro content collections + Sanity)",
+    "GET /noticias — listado de noticias desde colección JSON local",
+    "GET /sitemap.xml — sitemap generado en /src/pages/sitemap.xml.ts",
+    "sanityImg(url, opts) — transforma URLs de Sanity CDN añadiendo parámetros de optimización de imagen",
+    "sanitySrcset(url, widths) — genera atributo srcset para imágenes responsivas de Sanity",
+    "imageUrl(ref) — convierte un asset ref de Sanity a URL pública del CDN"
+  ]
+}

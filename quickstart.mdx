@@ -1,47 +1,170 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Levanta el Entorno de Desarrollo Local en 5 Pasos"
+sidebarTitle: "Inicio Rápido"
+description: "Clona el repositorio, instala dependencias, configura variables de entorno de Sanity y Gmail SMTP, y corre el servidor de desarrollo local de Astro."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
+El sitio web de ESG México está construido con Astro 6 y requiere Node.js ≥ 22.12.0, una cuenta de Sanity con un proyecto creado, y credenciales SMTP de Google Workspace para el endpoint de autoevaluación. Esta guía te lleva del repositorio vacío a un servidor de desarrollo funcionando en menos de cinco minutos, asumiendo que ya tienes Node.js y npm instalados en tu máquina.
 
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+## Prerrequisitos
 
-## Prerequisites
+Antes de comenzar, asegúrate de contar con lo siguiente:
 
-Before you begin, you must have:
+<CardGroup cols={3}>
+  <Card title="Node.js ≥ 22.12.0" icon="node">
+    La versión mínima de Node está declarada en `package.json` bajo el campo `engines`. Verifica con `node -v`.
+  </Card>
+  <Card title="Proyecto de Sanity" icon="database">
+    Crea un proyecto gratuito en [sanity.io/manage](https://sanity.io/manage) y anota tu `projectId` y el nombre del `dataset` (por defecto: `production`).
+  </Card>
+  <Card title="Cuenta de Vercel" icon="triangle">
+    Necesaria para los deployments de producción. El adaptador `@astrojs/vercel` genera la salida optimizada para la plataforma.
+  </Card>
+</CardGroup>
 
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+## Pasos de Instalación
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Clonar el repositorio e instalar dependencias">
+    Clona el repositorio desde tu fuente de control de versiones y ejecuta la instalación de dependencias desde la raíz del proyecto:
 
     ```bash
-    npm install your-package
+    git clone <url-del-repositorio> esg-mexico
+    cd esg-mexico
+    npm install
     ```
+
+    Esto instala todas las dependencias declaradas en `package.json`, incluyendo Astro 6, TailwindCSS 4, React 19, `@astrojs/vercel`, `@sanity/client` y `nodemailer`.
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Configurar las variables de entorno">
+    Copia el archivo de ejemplo y rellena cada variable con tus credenciales reales:
 
     ```bash
-    your-cli init
+    cp .env.example .env
     ```
+
+    Abre `.env` en tu editor y completa los siguientes valores:
+
+    ```bash
+    # Sanity — obtener en https://sanity.io/manage → proyecto → API
+    PUBLIC_SANITY_PROJECT_ID=xxxxxxxxx
+    PUBLIC_SANITY_DATASET=production
+
+    # Para el Studio (studio/.env)
+    SANITY_STUDIO_PROJECT_ID=xxxxxxxxx
+    SANITY_STUDIO_DATASET=production
+
+    # Vercel Deploy Hook (para rebuild automático al publicar en Sanity)
+    # Se crea en Vercel → proyecto → Settings → Git → Deploy Hooks
+    VERCEL_DEPLOY_HOOK_URL=https://api.vercel.com/v1/integrations/deploy/xxx
+
+    # SMTP de Google Workspace (buzon@esgmexico.net) — usado por /api/autoevaluacion
+    # SMTP_PASS es una "contraseña de aplicación" generada en la cuenta, NO la contraseña normal.
+    # Requiere verificación en 2 pasos activada en buzon@esgmexico.net.
+    SMTP_USER=buzon@esgmexico.net
+    SMTP_PASS=xxxxxxxxxxxxxxxx
+    ```
+
+    <Warning>
+      Las variables `PUBLIC_SANITY_PROJECT_ID` y `PUBLIC_SANITY_DATASET` son expuestas al cliente (prefijo `PUBLIC_`). Nunca incluyas credenciales privadas con ese prefijo. `SMTP_PASS` debe ser una **contraseña de aplicación** de Google, no la contraseña de la cuenta.
+    </Warning>
+
+    <Note>
+      El `VERCEL_DEPLOY_HOOK_URL` se usa para triggear rebuilds automáticos cuando se publica contenido nuevo en Sanity Studio. No es necesario para desarrollo local.
+    </Note>
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+  <Step title="Instalar y arrancar Sanity Studio">
+    El Studio de Sanity vive en el subdirectorio `studio/` con su propio `package.json`. Instala sus dependencias y levanta el servidor:
 
     ```bash
-    your-cli start
+    cd studio
+    npm install
+    npx sanity dev
     ```
+
+    Sanity Studio quedará disponible en `http://localhost:3333`. Desde ahí puedes gestionar los documentos de tipo `blogPost`, `noticia`, `author` y `tag`.
+
+    <Tip>
+      Crea también un archivo `studio/.env` con las variables `SANITY_STUDIO_PROJECT_ID` y `SANITY_STUDIO_DATASET` para que el Studio apunte al proyecto correcto. Estos valores deben ser idénticos a los del `.env` raíz.
+    </Tip>
+  </Step>
+
+  <Step title="Iniciar el servidor de desarrollo de Astro">
+    Regresa a la raíz del proyecto y ejecuta el script de desarrollo:
+
+    ```bash
+    cd ..
+    npm run dev
+    ```
+
+    Astro compilará el proyecto y levantará el servidor en:
+
+    ```
+    http://localhost:4321
+    ```
+
+    Los cambios en `.astro`, `.ts`, `.tsx` y archivos de contenido se reflejan automáticamente gracias al HMR de Vite.
+  </Step>
+
+  <Step title="Build de producción y preview local">
+    Para verificar el build estático antes de un deploy, ejecuta:
+
+    ```bash
+    npm run build
+    npm run preview
+    ```
+
+    El comando `build` invoca `astro build` con el adaptador de Vercel (`@astrojs/vercel`) y genera la salida en `.vercel/output/`. El comando `preview` sirve esa salida localmente para validar el comportamiento en producción.
+
+    <Note>
+      El adaptador Vercel genera una salida compatible con el sistema de archivos de Vercel Edge Network. No ejecutes `preview` en producción; usa el deploy en Vercel para eso.
+    </Note>
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## Scripts Disponibles
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+Todos los scripts están declarados en `package.json`:
+
+```json
+{
+  "scripts": {
+    "dev":     "astro dev",
+    "build":   "astro build",
+    "preview": "astro preview",
+    "astro":   "astro"
+  }
+}
+```
+
+| Script | Descripción |
+|--------|-------------|
+| `npm run dev` | Inicia el servidor de desarrollo en `localhost:4321` con HMR activo |
+| `npm run build` | Genera el build de producción con el adaptador de Vercel |
+| `npm run preview` | Sirve localmente el output del build para validación |
+| `npm run astro` | Acceso directo al CLI de Astro (`astro check`, `astro info`, etc.) |
+
+## Deploy en Producción con Vercel
+
+<Tabs>
+  <Tab title="Vía Vercel CLI">
+    ```bash
+    npm i -g vercel
+    vercel --prod
+    ```
+
+    Vercel detecta automáticamente el framework Astro y aplica la configuración del adaptador `@astrojs/vercel`.
+  </Tab>
+  <Tab title="Vía Git Integration">
+    1. Conecta el repositorio en el dashboard de [vercel.com](https://vercel.com).
+    2. En **Settings → Environment Variables**, agrega todas las variables del `.env`.
+    3. Habilita el Deploy Hook en **Settings → Git → Deploy Hooks** y pega la URL en `VERCEL_DEPLOY_HOOK_URL` de Sanity.
+    4. Cada push a `main` dispara un deploy automático.
+  </Tab>
+</Tabs>
+
+<Note>
+  El sitio de producción vive en `https://www.esgmexico.net`, configurado en `astro.config.mjs` bajo la clave `site`. Asegúrate de que el dominio esté correctamente configurado en el panel de Vercel antes del primer deploy a producción.
+</Note>

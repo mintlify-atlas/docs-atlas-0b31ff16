@@ -1,0 +1,257 @@
+---
+title: "Variables de Entorno: Sanity, SMTP y Vercel Deploy Hook"
+sidebarTitle: "Variables de Entorno"
+description: "Referencia completa de variables de entorno: PUBLIC_SANITY_PROJECT_ID, PUBLIC_SANITY_DATASET, SMTP_USER, SMTP_PASS y su uso en el código fuente."
+---
+
+El sitio ESG México utiliza variables de entorno para tres propósitos distintos: conectar con el proyecto de Sanity CMS, autenticar el servidor SMTP de Gmail para el formulario de autoevaluación, y configurar el webhook de Vercel que dispara redeployments al publicar contenido. Esta página documenta cada variable con su formato esperado, dónde se usa en el código fuente y si es accesible desde el cliente o solo desde el servidor. El archivo `.env.example` en la raíz del repositorio es la fuente de verdad; **copiar como `.env` y nunca versionar el `.env` con valores reales**.
+
+```bash .env.example
+# Sanity — obtener en https://sanity.io/manage → proyecto → API
+PUBLIC_SANITY_PROJECT_ID=xxxxxxxxx
+PUBLIC_SANITY_DATASET=production
+
+# Para el Studio (studio/.env)
+SANITY_STUDIO_PROJECT_ID=xxxxxxxxx
+SANITY_STUDIO_DATASET=production
+
+# Vercel Deploy Hook (para rebuild automático al publicar en Sanity)
+# Se crea en Vercel → proyecto → Settings → Git → Deploy Hooks
+VERCEL_DEPLOY_HOOK_URL=https://api.vercel.com/v1/integrations/deploy/xxx
+
+# SMTP de Google Workspace (buzon@esgmexico.net) — usado por /api/autoevaluacion
+# SMTP_PASS es una "contraseña de aplicación" generada en la cuenta, NO la contraseña normal.
+# Requiere verificación en 2 pasos activada en buzon@esgmexico.net.
+SMTP_USER=buzon@esgmexico.net
+SMTP_PASS=xxxxxxxxxxxxxxxx
+```
+
+<Warning>
+  Las variables con prefijo `PUBLIC_` en Astro se exponen al bundle de JavaScript del cliente y son visibles en el navegador. Úsalas **solo** para datos que no son secretos (IDs de proyecto, nombres de dataset). Las variables **sin** prefijo `PUBLIC_` (`SMTP_USER`, `SMTP_PASS`, `VERCEL_DEPLOY_HOOK_URL`, `SANITY_TOKEN`) son exclusivamente de servidor y nunca deben tener el prefijo `PUBLIC_`.
+</Warning>
+
+---
+
+## 1. Sanity CMS
+
+Estas variables se usan en `src/lib/sanity.ts` para inicializar el cliente de Sanity y en `src/components/SEO.astro` para construir URLs de imagen del CDN.
+
+<AccordionGroup>
+  <Accordion title="PUBLIC_SANITY_PROJECT_ID" icon="database">
+    | Campo | Valor |
+    |-------|-------|
+    | **Tipo** | String — ID alfanumérico de 8–9 caracteres |
+    | **Ejemplo** | `abc12def` |
+    | **Requerida** | Sí — el cliente Sanity falla sin este valor |
+    | **Exposición** | Pública (cliente + servidor) |
+    | **Dónde obtenerla** | [sanity.io/manage](https://sanity.io/manage) → tu proyecto → API → Project ID |
+
+    Usada en `src/lib/sanity.ts` para inicializar el cliente:
+
+    ```ts
+    // src/lib/sanity.ts
+    import { createClient } from "@sanity/client";
+
+    export const sanity = createClient({
+      projectId: import.meta.env.PUBLIC_SANITY_PROJECT_ID,
+      dataset:   import.meta.env.PUBLIC_SANITY_DATASET ?? "production",
+      apiVersion: "2024-01-01",
+      useCdn: true,
+    });
+    ```
+
+    También se usa en la función `imageUrl()` del mismo archivo para construir URLs del CDN de Sanity a partir de referencias de imagen:
+
+    ```ts
+    // src/lib/sanity.ts — función imageUrl()
+    export function imageUrl(ref: string | undefined): string {
+      if (!ref) return "";
+      const projectId = import.meta.env.PUBLIC_SANITY_PROJECT_ID;
+      const dataset   = import.meta.env.PUBLIC_SANITY_DATASET ?? "production";
+      // ref format: image-HASH-WxH-ext
+      const [, id, dims, ext] = ref.split("-");
+      return `https://cdn.sanity.io/images/${projectId}/${dataset}/${id}-${dims}.${ext}`;
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="PUBLIC_SANITY_DATASET" icon="layers">
+    | Campo | Valor |
+    |-------|-------|
+    | **Tipo** | String — nombre del dataset en Sanity |
+    | **Ejemplo** | `production` |
+    | **Requerida** | No — el cliente usa `"production"` como fallback |
+    | **Exposición** | Pública (cliente + servidor) |
+    | **Dónde obtenerla** | [sanity.io/manage](https://sanity.io/manage) → tu proyecto → Datasets |
+
+    Si tu proyecto de Sanity tiene múltiples datasets (ej. `production` y `staging`), esta variable permite apuntar a uno diferente por entorno de Vercel. En el entorno de **Preview** de Vercel puedes setearla como `staging` para previsualizar contenido sin afectar producción.
+
+    ```ts
+    // src/lib/sanity.ts — el fallback 'production' cubre el caso de omisión
+    dataset: import.meta.env.PUBLIC_SANITY_DATASET ?? "production",
+    ```
+  </Accordion>
+
+  <Accordion title="SANITY_STUDIO_PROJECT_ID y SANITY_STUDIO_DATASET" icon="pencil">
+    | Campo | Valor |
+    |-------|-------|
+    | **Tipo** | String |
+    | **Ejemplo** | `abc12def` / `production` |
+    | **Requerida** | Solo para el Studio (carpeta `studio/`) |
+    | **Exposición** | Studio — no se envían al sitio público |
+    | **Archivo** | `studio/.env` (separado del `.env` raíz) |
+
+    Estas variables son para Sanity Studio (el panel de administración del CMS), no para el sitio web en sí. El Studio tiene su propio archivo `.env` en la carpeta `studio/`. Se usan también en `studio/vercel-webhook.mjs` cuando se ejecuta manualmente para registrar el webhook:
+
+    ```bash
+    # Ejecución única del script de registro de webhook
+    SANITY_TOKEN=skXXXX \
+    SANITY_STUDIO_PROJECT_ID=abc12def \
+    VERCEL_DEPLOY_HOOK_URL=https://api.vercel.com/v1/integrations/deploy/xxx \
+    node studio/vercel-webhook.mjs
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## 2. Email / SMTP
+
+Usadas exclusivamente en el endpoint serverless `src/pages/api/autoevaluacion.ts` (`prerender = false`). Nunca se incluyen en el bundle del cliente.
+
+<AccordionGroup>
+  <Accordion title="SMTP_USER" icon="envelope">
+    | Campo | Valor |
+    |-------|-------|
+    | **Tipo** | String — dirección de email completa |
+    | **Ejemplo** | `buzon@esgmexico.net` |
+    | **Requerida** | Sí — nodemailer falla sin autenticación |
+    | **Exposición** | Solo servidor (sin prefijo `PUBLIC_`) |
+    | **Cuenta** | Google Workspace — `buzon@esgmexico.net` |
+
+    Se usa como dirección de autenticación SMTP y como remitente `from` del email:
+
+    ```ts
+    // src/pages/api/autoevaluacion.ts
+    const transporter = nodemailer.createTransport({
+      host: "smtp.gmail.com",
+      port: 465,
+      secure: true,
+      auth: {
+        user: import.meta.env.SMTP_USER,
+        pass: import.meta.env.SMTP_PASS,
+      },
+    });
+
+    await transporter.sendMail({
+      from: `"Sitio ESG México" <${import.meta.env.SMTP_USER}>`,
+      to: ["buzon@esgmexico.net"],
+      bcc: ["valeria@esgmexico.net", "ivan.espinosaf@gmail.com"],
+      subject: "Nuevo Cuestionario de Autoevaluación ESG",
+      // ...
+    });
+    ```
+  </Accordion>
+
+  <Accordion title="SMTP_PASS" icon="key">
+    | Campo | Valor |
+    |-------|-------|
+    | **Tipo** | String — contraseña de aplicación de Google (16 caracteres) |
+    | **Ejemplo** | `abcd efgh ijkl mnop` (Google la genera con espacios; removerlos) |
+    | **Requerida** | Sí |
+    | **Exposición** | Solo servidor (sin prefijo `PUBLIC_`) |
+
+    **Este valor es una contraseña de aplicación de Google, NO la contraseña de la cuenta de Gmail.** Para generarla:
+
+    1. Activar la verificación en 2 pasos en `buzon@esgmexico.net`.
+    2. Ir a [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords).
+    3. Crear una contraseña de aplicación con nombre `ESG Mexico Sitio Web`.
+    4. Google genera una clave de 16 caracteres. Copiarla sin espacios.
+
+    <Warning>
+      Si la contraseña de la cuenta de Gmail cambia o se revoca la verificación en 2 pasos, la contraseña de aplicación deja de funcionar y el endpoint `/api/autoevaluacion` comenzará a redirigir a `/servicios-esg?error=1`. Actualizar `SMTP_PASS` en Vercel → Settings → Environment Variables y hacer un redeploy.
+    </Warning>
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## 3. Vercel Deploy Hook
+
+<AccordionGroup>
+  <Accordion title="VERCEL_DEPLOY_HOOK_URL" icon="webhook">
+    | Campo | Valor |
+    |-------|-------|
+    | **Tipo** | String — URL HTTPS |
+    | **Ejemplo** | `https://api.vercel.com/v1/integrations/deploy/prj_xxx/yyy` |
+    | **Requerida** | Solo para el script `studio/vercel-webhook.mjs` |
+    | **Exposición** | Solo servidor / scripts de administración |
+    | **Dónde obtenerla** | Vercel → proyecto → Settings → Git → Deploy Hooks |
+
+    Esta URL es el endpoint que Sanity llama vía HTTP POST cada vez que se publica un documento. **No se usa en el código del sitio web en sí** — solo en el script de registro único `studio/vercel-webhook.mjs`. Una vez registrado el webhook en Sanity, esta variable solo se necesita si hay que re-registrar el webhook (ej. si se cambia el proyecto de Vercel).
+
+    <Note>
+      Tratar esta URL como un secreto: quien la conozca puede disparar un redeploy del sitio enviando un POST. No commitearla en el repositorio ni exponerla en variables `PUBLIC_`.
+    </Note>
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Uso de `Astro.site` en el componente SEO
+
+El componente `src/components/SEO.astro` no usa directamente ninguna variable de entorno para construir URLs — en su lugar lee `Astro.site`, que Astro inyecta automáticamente desde el valor `site` de `astro.config.mjs`:
+
+```astro
+---
+// src/components/SEO.astro — derivar siteUrl de Astro.site
+// Esto mantiene canonical, og:url y og:image en sync con astro.config.mjs
+const siteUrl = Astro.site
+  ? Astro.site.href.replace(/\/$/, "")
+  : "https://www.esgmexico.net"; // fallback explícito
+
+const canonicalUrl = canonical
+  ? canonical.startsWith("http")
+    ? canonical
+    : `${siteUrl}${canonical}`
+  : `${siteUrl}${Astro.url.pathname}`;
+
+const ogImageUrl = ogImage.startsWith("http")
+  ? ogImage
+  : `${siteUrl}${ogImage}`;
+---
+```
+
+<Note>
+  Si necesitas cambiar el dominio canónico del sitio, el único lugar donde debes hacerlo es `site` en `astro.config.mjs`. Todos los canonicals, og:url y og:image del sitio se actualizarán automáticamente en el siguiente build. No hardcodees `https://www.esgmexico.net` en componentes individuales.
+</Note>
+
+---
+
+## Configuración en Vercel
+
+Las variables de entorno deben setearse en el dashboard de Vercel **antes** del primer deploy. Vercel permite asignarlas por entorno (Production, Preview, Development):
+
+<Steps>
+  <Step title="Abrir la configuración de variables">
+    En el dashboard de Vercel: selecciona el proyecto → **Settings → Environment Variables**.
+  </Step>
+  <Step title="Agregar variables de producción">
+    Agregar cada variable con su valor real. Para `SMTP_PASS`, asegurarse de pegar la contraseña de aplicación **sin espacios**. Marcar el entorno como **Production** (y opcionalmente **Preview** si quieres que el endpoint de email funcione en previews de PR).
+
+    | Variable | Entorno recomendado |
+    |----------|-------------------|
+    | `PUBLIC_SANITY_PROJECT_ID` | Production + Preview + Development |
+    | `PUBLIC_SANITY_DATASET` | Production (`production`) + Preview (`staging` opcional) |
+    | `SMTP_USER` | Production |
+    | `SMTP_PASS` | Production |
+    | `VERCEL_DEPLOY_HOOK_URL` | No necesaria en Vercel (solo para el script local) |
+  </Step>
+  <Step title="Hacer redeploy">
+    Después de agregar o modificar variables, hacer un redeploy manual desde **Deployments → ⋯ → Redeploy** para que el nuevo build las recoja. Los cambios en variables no se aplican retroactivamente a builds anteriores.
+  </Step>
+</Steps>
+
+<Tip>
+  Para desarrollo local, copiar `.env.example` como `.env` en la raíz del proyecto y rellenar los valores reales. El archivo `.env` está en `.gitignore` — nunca commitear los valores reales. Para obtener `PUBLIC_SANITY_PROJECT_ID` y `PUBLIC_SANITY_DATASET`, revisar [sanity.io/manage](https://sanity.io/manage) en la sección **API** del proyecto.
+</Tip>

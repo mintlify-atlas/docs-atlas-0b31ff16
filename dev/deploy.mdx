@@ -1,0 +1,297 @@
+---
+title: "Despliegue en Vercel: Adaptador Astro, CI/CD y Webhooks"
+sidebarTitle: "Despliegue"
+description: "Cómo desplegar el sitio en Vercel: adaptador @astrojs/vercel, webhook de Sanity para redeployments automáticos, redirects, headers y dominios."
+---
+
+El sitio ESG México corre sobre Astro 6 con el adaptador oficial `@astrojs/vercel`, lo que habilita rutas SSR (como `/api/autoevaluacion`) junto a páginas estáticas pre-renderizadas. Vercel actúa como plataforma de CI/CD: cada push a `main` lanza un build automático, y un webhook de Sanity dispara redeployments adicionales cada vez que se publica nuevo contenido en el CMS. Esta página cubre el flujo completo, desde la configuración del adaptador hasta los headers de seguridad en producción.
+
+## Configuración del adaptador
+
+El archivo `astro.config.mjs` define el adaptador Vercel, el dominio canónico y la política de trailing slash. Estas tres líneas son las más relevantes para el despliegue:
+
+<CodeGroup>
+
+```js astro.config.mjs
+// @ts-check
+import { defineConfig } from "astro/config";
+import tailwindcss from "@tailwindcss/vite";
+import react from "@astrojs/react";
+import vercel from "@astrojs/vercel";
+
+export default defineConfig({
+  site: "https://www.esgmexico.net",
+  trailingSlash: "never",
+  adapter: vercel(),
+  integrations: [react()],
+  vite: {
+    plugins: [tailwindcss()],
+  },
+});
+```
+
+</CodeGroup>
+
+<Note>
+  `site` debe coincidir exactamente con el dominio canónico (incluyendo `www`). Este valor es el que usa el componente `SEO.astro` para construir URLs canónicas con `Astro.site`. Si se modifica, todas las etiquetas `<link rel="canonical">` y `og:url` del sitio cambiarán automáticamente en el siguiente build.
+</Note>
+
+## Proceso de despliegue en Vercel
+
+<Steps>
+  <Step title="Conectar el repositorio">
+    En el dashboard de Vercel, selecciona **Add New → Project** e importa el repositorio `ivanespinosa/esg-mexico-sitio-web` desde GitHub. Vercel detecta automáticamente que es un proyecto Astro.
+  </Step>
+
+  <Step title="Configurar variables de entorno">
+    Antes del primer deploy, agrega todas las variables del archivo `.env.example` en **Settings → Environment Variables** del proyecto. Son necesarias en tiempo de build (`PUBLIC_SANITY_*`) y en tiempo de ejecución (`SMTP_USER`, `SMTP_PASS`). Ver la página [Variables de Entorno](/dev/variables-entorno) para la referencia completa.
+  </Step>
+
+  <Step title="Configurar dominios">
+    En **Settings → Domains**, agrega ambos:
+    - `www.esgmexico.net` — dominio principal (sirve el sitio)
+    - `esgmexico.net` — dominio adicional configurado como redirect 301 a `www` (ver sección de `vercel.json` más abajo)
+
+    Vercel emite y renueva los certificados TLS automáticamente para ambos.
+  </Step>
+
+  <Step title="Ejecutar el primer deploy">
+    El comando de build configurado en Vercel es `npm run build`, que internamente ejecuta `astro build`. El output se deposita en `dist/`. Vercel sirve archivos estáticos directamente desde su CDN edge y enruta las peticiones a las funciones SSR (rutas con `prerender = false`).
+  </Step>
+
+  <Step title="Registrar el webhook de Sanity">
+    Una sola vez, ejecuta el script `studio/vercel-webhook.mjs` con las tres variables requeridas (ver sección Webhook de Sanity). Esto crea el listener en el proyecto de Sanity; a partir de ese momento cada publicación de contenido dispara un redeploy automático.
+  </Step>
+
+  <Step title="Verificar el deploy">
+    Confirma que el sitio funciona correctamente:
+
+    ```bash
+    # Redirect no-www → www (debe devolver 308)
+    curl -sI https://esgmexico.net/ | grep -E "location|HTTP"
+
+    # Canonical correcto en el blog
+    curl -s https://www.esgmexico.net/blog | grep canonical
+
+    # Endpoint de autoevaluación responde
+    curl -sI -X POST https://www.esgmexico.net/api/autoevaluacion
+    ```
+  </Step>
+</Steps>
+
+## Redirects y headers de seguridad (`vercel.json`)
+
+El archivo `vercel.json` define dos responsabilidades: consolidar el tráfico no-www hacia el dominio canónico con un redirect permanente, y añadir headers de seguridad HTTP a todas las rutas.
+
+<CodeGroup>
+
+```json vercel.json
+{
+  "redirects": [
+    {
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "esgmexico.net" }],
+      "destination": "https://www.esgmexico.net/:path*",
+      "permanent": true
+    }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Strict-Transport-Security",
+          "value": "max-age=63072000; includeSubDomains; preload"
+        },
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "DENY" },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(), geolocation=()"
+        }
+      ]
+    }
+  ]
+}
+```
+
+</CodeGroup>
+
+<CardGroup cols={2}>
+  <Card title="Redirect 301 no-www → www" icon="arrow-right">
+    La condición `has.type: host` captura únicamente peticiones al host `esgmexico.net` y las redirige a `https://www.esgmexico.net/:path*`, preservando la ruta y los query params. `permanent: true` emite un código 308.
+  </Card>
+  <Card title="HSTS con preload" icon="lock">
+    `max-age=63072000` (2 años) con `includeSubDomains; preload` indica a los navegadores que el sitio solo debe cargarse por HTTPS y lo registra en la lista de preload de los navegadores.
+  </Card>
+  <Card title="X-Frame-Options: DENY" icon="shield">
+    Bloquea que el sitio sea embebido en iframes desde cualquier origen, mitigando ataques de clickjacking.
+  </Card>
+  <Card title="Permissions-Policy" icon="eye-slash">
+    Deshabilita explícitamente el acceso a cámara, micrófono y geolocalización desde el contexto del sitio.
+  </Card>
+</CardGroup>
+
+<Warning>
+  No sobrescribas `vercel.json` sin hacer merge con la versión existente. Eliminar el redirect no-www dejaría las señales SEO divididas entre dos hosts y rompería los canonicals. Eliminar los headers de seguridad baja la puntuación de [securityheaders.com](https://securityheaders.com).
+</Warning>
+
+## Webhook de Sanity → Vercel (redeploy por contenido)
+
+Cuando un editor publica un documento en Sanity Studio, el contenido queda en el CMS pero el sitio estático en Vercel todavía sirve el HTML anterior. El script `studio/vercel-webhook.mjs` registra un listener HTTP en la API de Sanity que dispara el Deploy Hook de Vercel al detectar cualquier publicación.
+
+<CodeGroup>
+
+```js studio/vercel-webhook.mjs
+/**
+ * Registra un webhook en Sanity para hacer deploy en Vercel al publicar contenido.
+ *
+ * Uso (una sola vez):
+ *   SANITY_TOKEN=xxx SANITY_STUDIO_PROJECT_ID=xxx VERCEL_DEPLOY_HOOK_URL=https://... node vercel-webhook.mjs
+ */
+
+const projectId = process.env.SANITY_STUDIO_PROJECT_ID;
+const token = process.env.SANITY_TOKEN;
+const hookUrl = process.env.VERCEL_DEPLOY_HOOK_URL;
+
+if (!projectId || !token || !hookUrl) {
+  console.error(
+    "Faltan variables: SANITY_STUDIO_PROJECT_ID, SANITY_TOKEN, VERCEL_DEPLOY_HOOK_URL"
+  );
+  process.exit(1);
+}
+
+const res = await fetch(
+  `https://api.sanity.io/v2021-10-01/hooks/projects/${projectId}`,
+  {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      type: "document",
+      url: hookUrl,
+      name: "Vercel Deploy — ESG México",
+      description: "Rebuild del sitio web al publicar contenido",
+      dataset: "production",
+      httpMethod: "POST",
+      includeDrafts: false,
+      isDisabled: false,
+    }),
+  }
+);
+
+const json = await res.json();
+if (res.ok) {
+  console.log("✅ Webhook registrado:", json.id);
+} else {
+  console.error("Error:", json);
+}
+```
+
+</CodeGroup>
+
+<Steps>
+  <Step title="Crear el Deploy Hook en Vercel">
+    En el proyecto de Vercel: **Settings → Git → Deploy Hooks**. Crea un hook llamado `Sanity Publish`, apuntado a la rama `main`. Copia la URL generada (empieza con `https://api.vercel.com/v1/integrations/deploy/...`).
+  </Step>
+
+  <Step title="Obtener un token de Sanity">
+    En [sanity.io/manage](https://sanity.io/manage), selecciona el proyecto y ve a **API → Tokens**. Crea un token con permisos `Editor` o superior (necesita leer la configuración de webhooks).
+  </Step>
+
+  <Step title="Ejecutar el script">
+    ```bash
+    SANITY_TOKEN=skXXXX \
+    SANITY_STUDIO_PROJECT_ID=xxxxxxxxx \
+    VERCEL_DEPLOY_HOOK_URL=https://api.vercel.com/v1/integrations/deploy/xxx \
+    node studio/vercel-webhook.mjs
+    ```
+
+    El script imprime el ID del webhook registrado si tiene éxito. Este comando solo necesita ejecutarse **una vez** por entorno.
+  </Step>
+
+  <Step title="Verificar en Sanity">
+    En [sanity.io/manage](https://sanity.io/manage) → **API → Webhooks** debe aparecer el webhook "Vercel Deploy — ESG México" con estado activo. Publica cualquier documento en Sanity Studio y confirma que se inicia un nuevo deployment en el dashboard de Vercel.
+  </Step>
+</Steps>
+
+<Note>
+  El webhook tiene `includeDrafts: false`, lo que significa que solo los documentos **publicados** (no los borradores) disparan el redeploy. Esto es el comportamiento correcto para un sitio SSG en producción.
+</Note>
+
+## Endpoint SSR: `POST /api/autoevaluacion`
+
+La ruta `src/pages/api/autoevaluacion.ts` es la única en el sitio con `prerender = false`, lo que la convierte en una función serverless de Vercel. Recibe el formulario de autoevaluación ESG, lo envía por email vía nodemailer/Gmail SMTP y redirige al usuario con un query param de resultado.
+
+<CodeGroup>
+
+```ts src/pages/api/autoevaluacion.ts
+import type { APIRoute } from "astro";
+import nodemailer from "nodemailer";
+
+export const prerender = false;
+
+const DESTINATARIOS = ["buzon@esgmexico.net"];
+const CON_COPIA_OCULTA = ["valeria@esgmexico.net", "ivan.espinosaf@gmail.com"];
+
+export const POST: APIRoute = async ({ request, redirect }) => {
+  const formData = await request.formData();
+
+  // Honeypot anti-spam
+  if (formData.get("botcheck")) {
+    return redirect("/servicios-esg?enviado=1#autoevaluacion", 303);
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 465,
+    secure: true,
+    auth: {
+      user: import.meta.env.SMTP_USER,
+      pass: import.meta.env.SMTP_PASS,
+    },
+  });
+
+  try {
+    await transporter.sendMail({
+      from: `"Sitio ESG México" <${import.meta.env.SMTP_USER}>`,
+      to: DESTINATARIOS,
+      bcc: CON_COPIA_OCULTA,
+      subject: "Nuevo Cuestionario de Autoevaluación ESG",
+      html: `<table>${filas}</table>`,
+    });
+  } catch (err) {
+    console.error("Error al enviar autoevaluación:", err);
+    return redirect("/servicios-esg?error=1#autoevaluacion", 303);
+  }
+
+  return redirect("/servicios-esg?enviado=1#autoevaluacion", 303);
+};
+```
+
+</CodeGroup>
+
+<CardGroup cols={2}>
+  <Card title="Honeypot anti-spam" icon="robot">
+    El campo oculto `botcheck` sirve como trampa para bots. Si viene relleno, la petición se descarta silenciosamente con un redirect 303 exitoso, sin revelar al bot que fue ignorado.
+  </Card>
+  <Card title="Destinatarios fijos" icon="envelope">
+    `DESTINATARIOS` recibe el email principal; `CON_COPIA_OCULTA` (BCC) incluye a `valeria@esgmexico.net` e `ivan.espinosaf@gmail.com`. Ambas listas están hardcodeadas en el archivo fuente.
+  </Card>
+  <Card title="Gmail SMTP (puerto 465)" icon="at-sign">
+    Usa `smtp.gmail.com:465` con TLS implícito. `SMTP_PASS` debe ser una **contraseña de aplicación** de Google Workspace, no la contraseña de la cuenta. Requiere 2FA activado en `buzon@esgmexico.net`.
+  </Card>
+  <Card title="Redirects de resultado" icon="arrows-left-right">
+    Éxito → `/servicios-esg?enviado=1#autoevaluacion`. Error SMTP → `/servicios-esg?error=1#autoevaluacion`. El cliente JavaScript en esa página lee el query param y muestra el mensaje correspondiente.
+  </Card>
+</CardGroup>
+
+<Warning>
+  `SMTP_USER` y `SMTP_PASS` son variables de entorno de servidor (sin prefijo `PUBLIC_`). Nunca deben exponerse en el cliente. Dado que `prerender = false`, Astro ejecuta esta ruta exclusivamente en el runtime de Vercel, donde las variables de entorno del proyecto están disponibles de forma segura vía `import.meta.env`.
+</Warning>

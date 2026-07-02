@@ -1,0 +1,140 @@
+---
+title: "Configuración del Proyecto: Variables y Comandos"
+sidebarTitle: "Configuración"
+description: "Variables de entorno requeridas para Sanity, SMTP Gmail y despliegue en Vercel. Todos los comandos npm disponibles para desarrollo y producción."
+---
+
+El proyecto requiere configurar variables de entorno antes de poder iniciar el servidor de desarrollo o ejecutar un build. Las variables cubren tres áreas: conexión al proyecto Sanity (lectura de contenido), credenciales SMTP de Google Workspace (envío de correos desde el formulario de autoevaluación) y un webhook de Vercel para disparar rebuilds automáticos cuando se publica contenido nuevo en el CMS.
+
+<Warning>
+  Nunca confirmes el archivo `.env` en git. Está incluido en `.gitignore`. Las credenciales SMTP y el deploy hook son secretos de producción — exponer el `SMTP_PASS` permitiría enviar correos desde `buzon@esgmexico.net`.
+</Warning>
+
+## Variables de entorno
+
+### Sanity CMS
+
+Estas variables son **públicas** (prefijo `PUBLIC_`) y se incrustan en el bundle del cliente. Solo exponen el ID del proyecto y el nombre del dataset — no otorgan permisos de escritura.
+
+```ini title=".env — Sanity (sitio web)"
+# Obtener en https://sanity.io/manage → proyecto → API
+PUBLIC_SANITY_PROJECT_ID=xxxxxxxxx
+PUBLIC_SANITY_DATASET=production
+```
+
+El Studio (carpeta `studio/`) usa sus propias variables sin el prefijo `PUBLIC_`:
+
+```ini title="studio/.env — Sanity Studio"
+SANITY_STUDIO_PROJECT_ID=xxxxxxxxx
+SANITY_STUDIO_DATASET=production
+```
+
+<Tip>
+  Ambos archivos deben apuntar al **mismo** `projectId` y `dataset`. Un mismatch causará que el Studio edite un proyecto diferente al que el sitio consulta.
+</Tip>
+
+### Vercel Deploy Hook
+
+Cuando se publica o actualiza contenido en Sanity, el webhook dispara un rebuild automático en Vercel para que los cambios queden reflejados en el sitio estático.
+
+```ini title=".env — Vercel Deploy Hook"
+# Crear en Vercel → proyecto → Settings → Git → Deploy Hooks
+VERCEL_DEPLOY_HOOK_URL=https://api.vercel.com/v1/integrations/deploy/xxx
+```
+
+### SMTP / Email
+
+Usado exclusivamente por el endpoint serverless `/api/autoevaluacion`. El correo se envía desde `buzon@esgmexico.net` usando Google Workspace con SMTP autenticado.
+
+```ini title=".env — SMTP Google Workspace"
+# SMTP_PASS es una "contraseña de aplicación" generada en la cuenta de Google.
+# NO es la contraseña normal de Gmail. Requiere verificación en 2 pasos activa.
+SMTP_USER=buzon@esgmexico.net
+SMTP_PASS=xxxxxxxxxxxxxxxx
+```
+
+<Note>
+  Para generar `SMTP_PASS`: accede a **Cuenta de Google → Seguridad → Contraseñas de aplicación**. Crea una contraseña para "Correo" y "Otro dispositivo". Esta contraseña de 16 caracteres es la que va en `SMTP_PASS`.
+</Note>
+
+## Archivo `.env` completo de referencia
+
+```ini title=".env.example"
+# Sanity — obtener en https://sanity.io/manage → proyecto → API
+PUBLIC_SANITY_PROJECT_ID=xxxxxxxxx
+PUBLIC_SANITY_DATASET=production
+
+# Para el Studio (studio/.env)
+SANITY_STUDIO_PROJECT_ID=xxxxxxxxx
+SANITY_STUDIO_DATASET=production
+
+# Vercel Deploy Hook (para rebuild automático al publicar en Sanity)
+# Se crea en Vercel → proyecto → Settings → Git → Deploy Hooks
+VERCEL_DEPLOY_HOOK_URL=https://api.vercel.com/v1/integrations/deploy/xxx
+
+# SMTP de Google Workspace (buzon@esgmexico.net) — usado por /api/autoevaluacion
+# SMTP_PASS es una "contraseña de aplicación" generada en la cuenta, NO la contraseña normal.
+# Requiere verificación en 2 pasos activada en buzon@esgmexico.net.
+SMTP_USER=buzon@esgmexico.net
+SMTP_PASS=xxxxxxxxxxxxxxxx
+```
+
+## Comandos NPM
+
+Los cuatro scripts disponibles en `package.json` cubren todo el ciclo de desarrollo y despliegue:
+
+<Tabs>
+  <Tab title="Desarrollo">
+    ```bash title="Servidor local con hot-reload"
+    npm run dev
+    # Alias: astro dev
+    # Inicia en http://localhost:4321
+    ```
+
+    <Note>
+      Requiere que las variables de entorno estén definidas en `.env` en la raíz del proyecto. El servidor de dev de Astro las carga automáticamente vía Vite.
+    </Note>
+  </Tab>
+  <Tab title="Build">
+    ```bash title="Compilar para producción"
+    npm run build
+    # Alias: astro build
+    # Genera la carpeta dist/ con páginas estáticas y funciones serverless
+    ```
+
+    Durante el build, Astro consulta Sanity CDN para pre-renderizar todas las rutas de blog y noticias.
+  </Tab>
+  <Tab title="Preview">
+    ```bash title="Vista previa del build"
+    npm run preview
+    # Alias: astro preview
+    # Sirve dist/ localmente para verificar el build antes de desplegar
+    ```
+  </Tab>
+  <Tab title="CLI Astro">
+    ```bash title="CLI de Astro directamente"
+    npm run astro -- --help
+    # Permite ejecutar subcomandos: astro add, astro check, astro sync, etc.
+    ```
+  </Tab>
+</Tabs>
+
+## TypeScript
+
+El proyecto extiende la configuración estricta oficial de Astro:
+
+```json title="tsconfig.json"
+{
+  "extends": "astro/tsconfigs/strict",
+  "include": [".astro/types.d.ts", "**/*"],
+  "exclude": ["dist"]
+}
+```
+
+<Accordion title="¿Qué incluye el modo strict de Astro?">
+  La config `astro/tsconfigs/strict` activa las opciones más exigentes de TypeScript: `strict: true` (que engloba `strictNullChecks`, `noImplicitAny`, `strictFunctionTypes`, entre otros), `verbatimModuleSyntax` para imports de tipo, y el target adecuado para el runtime. El archivo `.astro/types.d.ts` es generado automáticamente por Astro con los tipos de las colecciones de contenido y las variables de entorno.
+</Accordion>
+
+<Note>
+  El motor de Node requerido es `>=22.12.0` (definido en `engines` de `package.json`). Vercel respeta este campo y selecciona automáticamente la versión correcta. En desarrollo local, se recomienda usar [nvm](https://github.com/nvm-sh/nvm) o [fnm](https://github.com/Schniz/fnm) para fijar la versión.
+</Note>

@@ -1,0 +1,373 @@
+---
+title: "Sanity CMS: Esquemas de Contenido y GROQ Queries"
+sidebarTitle: "Sanity CMS"
+description: "Guía del CMS Sanity headless: esquemas blogPost, noticia, author y tag, queries GROQ desde src/lib/queries.ts, y funciones de imagen sanityImg/sanitySrcset."
+---
+
+Sanity actúa como la fuente única de verdad para todo el contenido editorial del sitio: artículos del blog, noticias, autoras y etiquetas. El sitio consume Sanity a través de su API CDN usando el cliente oficial `@sanity/client`; el contenido se obtiene en tiempo de build mediante queries GROQ y se pre-renderiza como HTML estático. El Sanity Studio —incluido en la carpeta `studio/`— es la interfaz de edición para el equipo de contenido.
+
+## Cliente Sanity
+
+La instancia del cliente se crea en `src/lib/sanity.ts` y se reutiliza en todo el proyecto. Usa el CDN de Sanity (`useCdn: true`) para máxima velocidad en lecturas de build.
+
+```ts title="src/lib/sanity.ts — cliente"
+import { createClient } from '@sanity/client'
+
+export const sanity = createClient({
+  projectId: import.meta.env.PUBLIC_SANITY_PROJECT_ID,
+  dataset:   import.meta.env.PUBLIC_SANITY_DATASET ?? 'production',
+  apiVersion: '2024-01-01',
+  useCdn: true,
+})
+```
+
+<Note>
+  `apiVersion: '2024-01-01'` fija la versión de la API para garantizar compatibilidad. Actualizar este valor a una fecha más reciente puede desbloquear nuevas funcionalidades de GROQ pero requiere pruebas de regresión.
+</Note>
+
+## Funciones de imagen
+
+El mismo módulo `src/lib/sanity.ts` exporta tres utilidades para construir URLs optimizadas desde el Image Pipeline de Sanity CDN.
+
+### `sanityImg`
+
+Aplica transformaciones de redimensión, recorte y formato automático a una URL del CDN. Las URLs que no pertenecen a `cdn.sanity.io` se devuelven sin modificar.
+
+```ts title="src/lib/sanity.ts — sanityImg"
+export function sanityImg(
+  url: string | undefined,
+  opts: { w: number; h?: number; q?: number } = { w: 640 },
+): string {
+  if (!url || !url.includes('cdn.sanity.io')) return url ?? ''
+  const params = new URLSearchParams()
+  params.set('w', String(opts.w))
+  if (opts.h) {
+    params.set('h', String(opts.h))
+    params.set('fit', 'crop')
+  }
+  params.set('auto', 'format')          // WebP/AVIF según soporte del navegador
+  params.set('q', String(opts.q ?? 75)) // Calidad por defecto: 75
+  return `${url}${url.includes('?') ? '&' : '?'}${params.toString()}`
+}
+```
+
+| Parámetro | Tipo | Default | Descripción |
+|-----------|------|---------|-------------|
+| `url` | `string \| undefined` | — | URL pública de la imagen en Sanity CDN |
+| `opts.w` | `number` | `640` | Ancho en píxeles |
+| `opts.h` | `number` | — | Alto en píxeles; activa `fit=crop` |
+| `opts.q` | `number` | `75` | Calidad de compresión (1–100) |
+
+### `sanitySrcset`
+
+Genera una cadena `srcset` con múltiples anchos para imágenes responsivas. Ideal para el atributo `srcset` de `<img>` o `<source>`.
+
+```ts title="src/lib/sanity.ts — sanitySrcset"
+export function sanitySrcset(
+  url: string | undefined,
+  widths: number[] = [400, 640, 960],
+): string {
+  if (!url || !url.includes('cdn.sanity.io')) return ''
+  return widths.map((w) => `${sanityImg(url, { w })} ${w}w`).join(', ')
+}
+```
+
+**Ejemplo de salida:**
+```
+https://cdn.sanity.io/images/.../foto.jpg?w=400&auto=format&q=75 400w,
+https://cdn.sanity.io/images/.../foto.jpg?w=640&auto=format&q=75 640w,
+https://cdn.sanity.io/images/.../foto.jpg?w=960&auto=format&q=75 960w
+```
+
+### `imageUrl`
+
+Convierte una referencia interna de Sanity (formato `image-HASH-WxH-ext`) en una URL pública del CDN, sin aplicar transformaciones adicionales.
+
+```ts title="src/lib/sanity.ts — imageUrl"
+export function imageUrl(ref: string | undefined): string {
+  if (!ref) return ''
+  const projectId = import.meta.env.PUBLIC_SANITY_PROJECT_ID
+  const dataset   = import.meta.env.PUBLIC_SANITY_DATASET ?? 'production'
+  // ref format: image-HASH-WxH-ext
+  const [, id, dims, ext] = ref.split('-')
+  return `https://cdn.sanity.io/images/${projectId}/${dataset}/${id}-${dims}.${ext}`
+}
+```
+
+## Esquemas de contenido
+
+El Sanity Studio define cuatro tipos de documentos. A continuación se describe cada uno con sus campos clave.
+
+<Tabs>
+  <Tab title="blogPost">
+    Tipo principal del blog. Agrupa sus campos en tres pestañas: **Contenido**, **Metadatos** y **SEO**.
+
+    ```ts title="studio/schemas/blogPost.ts — campos principales"
+    defineType({
+      name: 'blogPost',
+      title: 'Artículos del Blog',
+      type: 'document',
+      fields: [
+        { name: 'title',       type: 'string',    /* min:10, max:120, required */ },
+        { name: 'slug',        type: 'slug',      /* source: title, max:96, required */ },
+        { name: 'author',      type: 'reference', /* → author, required */ },
+        { name: 'date',        type: 'date',      /* required */ },
+        { name: 'category',    type: 'string',    /* radio list, required */ },
+        { name: 'tags',        type: 'array',     /* references → tag[] */ },
+        { name: 'featured',    type: 'boolean',   /* default: false */ },
+        { name: 'coverImage',  type: 'image',     /* hotspot, required */ },
+        { name: 'excerpt',     type: 'text',      /* max:300, warning >160 */ },
+        { name: 'body',        type: 'array',     /* Portable Text, required */ },
+        { name: 'readingTime', type: 'number',    /* default: 5 */ },
+      ],
+    })
+    ```
+
+    **Categorías disponibles:** `Estrategia ESG` · `Regulación y Cumplimiento` · `Reportes y Estándares` · `Sostenibilidad Financiera` · `Fundaciones` · `Casos y Tendencias`
+
+    El campo `body` admite bloques de tipo `block` (con estilos `h2`, `h3`, `blockquote`, marcadores `strong`/`em` y anotaciones de enlace) e `image` con campos `alt` y `caption`.
+  </Tab>
+  <Tab title="noticia">
+    Noticias externas: artículos en medios, eventos y premios. Se muestran como tarjetas con imagen y enlace externo.
+
+    ```ts title="studio/schemas/noticia.ts — campos principales"
+    defineType({
+      name: 'noticia',
+      title: 'Noticias',
+      type: 'document',
+      fields: [
+        { name: 'title',       type: 'string', /* required */ },
+        { name: 'slug',        type: 'slug',   /* source: title, max:96 */ },
+        { name: 'date',        type: 'date',   /* required */ },
+        { name: 'category',    type: 'string', /* radio: Evento | Aparición | Medio | Premio */ },
+        { name: 'excerpt',     type: 'text',   /* required */ },
+        { name: 'thumbnail',   type: 'image',  /* hotspot, required — imagen de tarjeta */ },
+        { name: 'modalImage',  type: 'image',  /* opcional — infografía completa en modal */ },
+        { name: 'externalUrl', type: 'url',    /* required */ },
+      ],
+    })
+    ```
+
+    <Tip>
+      `modalImage` puede ser la misma imagen que `thumbnail`. Se usa cuando la tarjeta abre un modal con una versión de mayor resolución (por ejemplo, infografías).
+    </Tip>
+  </Tab>
+  <Tab title="author">
+    Perfil de las autoras del blog. Incluye redes sociales y firma digital para mostrar al pie de cada artículo.
+
+    ```ts title="studio/schemas/author.ts — campos principales"
+    defineType({
+      name: 'author',
+      title: 'Autoras',
+      type: 'document',
+      fields: [
+        { name: 'name',      type: 'string', /* required */ },
+        { name: 'slug',      type: 'slug',   /* source: name — ej: ximena-ugarte */ },
+        { name: 'role',      type: 'string', /* placeholder: Directora y Fundadora */ },
+        { name: 'bio',       type: 'text'   /* semblanza, 4 rows */ },
+        { name: 'photo',     type: 'image', /* hotspot */ },
+        { name: 'signature', type: 'image', /* PNG con fondo blanco */ },
+        { name: 'linkedin',  type: 'url' },
+        { name: 'twitter',   type: 'url' },
+        { name: 'instagram', type: 'url' },
+      ],
+    })
+    ```
+  </Tab>
+  <Tab title="tag">
+    Etiquetas reutilizables referenciadas desde `blogPost`. Estructura mínima: nombre y slug.
+
+    ```ts title="studio/schemas/tag.ts"
+    defineType({
+      name: 'tag',
+      title: 'Etiquetas',
+      type: 'document',
+      fields: [
+        { name: 'name', type: 'string', /* required */ },
+        { name: 'slug', type: 'slug',   /* source: name, max:96 */ },
+      ],
+    })
+    ```
+  </Tab>
+</Tabs>
+
+## Queries GROQ
+
+Todas las queries del sitio están centralizadas en `src/lib/queries.ts`. Se ejecutan en tiempo de build con `sanity.fetch(QUERY, params)`.
+
+<CodeGroup>
+```groq title="BLOG_LIST_QUERY — todos los artículos"
+*[_type == "blogPost"] | order(date desc) {
+  _id,
+  title,
+  "slug": slug.current,
+  excerpt,
+  date,
+  category,
+  featured,
+  readingTime,
+  "coverImage": coverImage.asset->url,
+  "author": author-> {
+    name,
+    "slug": slug.current,
+    role,
+    "photo": photo.asset->url,
+    "signatureUrl": signature.asset->url,
+    linkedin,
+    twitter,
+    instagram,
+  },
+  "tags": tags[]->{ name, "slug": slug.current },
+}
+```
+
+```groq title="BLOG_POST_QUERY — artículo por slug"
+*[_type == "blogPost" && slug.current == $slug][0] {
+  _id,
+  title,
+  "slug": slug.current,
+  excerpt,
+  date,
+  category,
+  featured,
+  readingTime,
+  "coverImage": coverImage.asset->url,
+  body,
+  "author": author-> {
+    name,
+    "slug": slug.current,
+    role,
+    "photo": photo.asset->url,
+    "signatureUrl": signature.asset->url,
+    linkedin,
+    twitter,
+    instagram,
+  },
+  "tags": tags[]->{ name, "slug": slug.current },
+}
+```
+
+```groq title="BLOG_SLUGS_QUERY — slugs para getStaticPaths"
+*[_type == "blogPost"]{ "slug": slug.current }
+```
+
+```groq title="NOTICIAS_QUERY — todas las noticias"
+*[_type == "noticia"] | order(date desc) {
+  _id,
+  title,
+  "slug": slug.current,
+  date,
+  category,
+  excerpt,
+  "image": thumbnail.asset->url,
+  "modalImage": modalImage.asset->url,
+  externalUrl,
+}
+```
+</CodeGroup>
+
+<Accordion title="Convenciones de las queries">
+  - `"slug": slug.current` — desnormaliza el objeto `slug` a string directo.
+  - `author->` y `coverImage.asset->` — dereferencia las referencias de Sanity en una sola query, evitando N+1.
+  - `tags[]->{ ... }` — itera el array de referencias y proyecta solo los campos necesarios.
+  - `$slug` en `BLOG_POST_QUERY` — parámetro de query tipado; se pasa como `sanity.fetch(BLOG_POST_QUERY, { slug })`.
+  - `| order(date desc)` — orden cronológico inverso por defecto en listados.
+</Accordion>
+
+## Colecciones de contenido (Astro)
+
+Además de Sanity, el proyecto mantiene colecciones locales en `src/content/` para contenido estático (archivos `.md` y `.json`). Los schemas se validan con Zod en `src/content.config.ts`.
+
+```ts title="src/content.config.ts"
+import { defineCollection, z } from "astro:content";
+import { glob } from "astro/loaders";
+
+const blog = defineCollection({
+  loader: glob({ pattern: "**/*.md", base: "./src/content/blog" }),
+  schema: z.object({
+    title: z.string(),
+    excerpt: z.string(),
+    date: z.coerce.date(),
+    author: z.enum(["ximena-ugarte", "valeria-garcia"]),
+    category: z.enum([
+      "Regulación y Cumplimiento",
+      "Reportes y Estándares",
+      "Estrategia ESG",
+      "Fundaciones",
+      "Sostenibilidad Financiera",
+      "Casos y Tendencias",
+    ]),
+    tags: z.array(z.string()).default([]),
+    coverImage: z.string(),
+    readingTime: z.number(),
+    featured: z.boolean().default(false),
+  }),
+});
+
+const noticias = defineCollection({
+  loader: glob({ pattern: "**/*.json", base: "./src/content/noticias" }),
+  schema: z.object({
+    title: z.string(),
+    date: z.coerce.date(),
+    image: z.string(),
+    excerpt: z.string(),
+    externalUrl: z.string().url(),
+    category: z.enum(["Medio", "Evento", "Premio", "Aparición"]),
+  }),
+});
+
+export const collections = { blog, noticias };
+```
+
+<Note>
+  Las colecciones locales (`src/content/`) son independientes del contenido en Sanity. El sitio puede servir artículos desde ambas fuentes simultáneamente. En producción, Sanity es la fuente principal para contenido nuevo; los archivos locales pueden contener contenido migrado o de prueba.
+</Note>
+
+## Sanity Studio
+
+El Studio está en la carpeta `studio/` con su propia configuración en `studio/sanity.config.ts`. Incluye el `structureTool` con navegación personalizada y el `visionTool` para ejecutar queries GROQ interactivas.
+
+<Steps>
+  <Step title="Instalar dependencias del Studio">
+    ```bash title="Desde la raíz del repositorio"
+    cd studio
+    npm install
+    ```
+  </Step>
+  <Step title="Configurar variables de entorno del Studio">
+    Crea el archivo `studio/.env` con las credenciales del proyecto:
+
+    ```ini title="studio/.env"
+    SANITY_STUDIO_PROJECT_ID=xxxxxxxxx
+    SANITY_STUDIO_DATASET=production
+    ```
+  </Step>
+  <Step title="Iniciar el Studio en local">
+    ```bash title="Servidor de desarrollo del Studio"
+    cd studio
+    npx sanity dev
+    # Studio disponible en http://localhost:3333
+    ```
+  </Step>
+  <Step title="Desplegar el Studio (opcional)">
+    ```bash title="Publicar Studio en sanity.io/studios"
+    cd studio
+    npx sanity deploy
+    ```
+
+    Esto publica el Studio en una URL `https://<nombre>.sanity.studio` accesible para el equipo editorial sin necesidad de ejecutar nada localmente.
+  </Step>
+</Steps>
+
+La estructura de navegación del Studio organiza los tipos de documentos en dos grupos separados por un divisor:
+
+<CardGroup cols={2}>
+  <Card title="Contenido editorial" icon="pencil">
+    📝 **Artículos del Blog** — documentos `blogPost`  
+    📰 **Noticias** — documentos `noticia`
+  </Card>
+  <Card title="Datos de referencia" icon="tag">
+    👤 **Autoras** — documentos `author`  
+    🏷️ **Etiquetas** — documentos `tag`
+  </Card>
+</CardGroup>

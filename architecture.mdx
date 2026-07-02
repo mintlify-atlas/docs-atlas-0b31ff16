@@ -1,0 +1,341 @@
+---
+title: "Arquitectura del Sitio Web de ESG México"
+sidebarTitle: "Arquitectura"
+description: "Visión técnica del sitio: Astro 6 SSG con adaptador Vercel, Sanity CMS headless, TailwindCSS 4, React para componentes interactivos y CI/CD automático."
+---
+
+El sitio web de ESG México es una aplicación Jamstack de alto rendimiento: Astro 6 genera páginas estáticas en tiempo de build consumiendo contenido de Sanity CMS vía GROQ, sirve los assets a través de la CDN de Vercel, e hidrata selectivamente solo los componentes React que requieren interactividad en el cliente. Esta arquitectura garantiza Time-to-First-Byte mínimo, SEO óptimo y despliegues atómicos con rollback inmediato.
+
+## Visión General
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                        SANITY CMS                            │
+│  Studio (localhost:3333 / sanity.io/studio)                  │
+│  Schemas: blogPost · noticia · author · tag                  │
+│  CDN: cdn.sanity.io  │  API GROQ: api.sanity.io              │
+└───────────────────────────────┬──────────────────────────────┘
+                                │ GROQ queries (@sanity/client)
+                                ▼
+┌──────────────────────────────────────────────────────────────┐
+│                      ASTRO 6 (BUILD)                         │
+│  src/pages/       → rutas estáticas + SSR endpoint           │
+│  src/layouts/     → Layout.astro (HTML shell)                │
+│  src/components/  → Astro + React islands                    │
+│  src/content/     → blog (MD) + noticias (JSON)              │
+│  src/lib/         → sanity.ts (cliente + helpers de imagen)  │
+└───────────────────────────────┬──────────────────────────────┘
+                                │ astro build → @astrojs/vercel
+                                ▼
+┌──────────────────────────────────────────────────────────────┐
+│                    VERCEL EDGE NETWORK                       │
+│  Static assets  │  Edge Functions  │  Deploy Hooks           │
+│  esgmexico.net  │  /api/*          │  Sanity → rebuild       │
+└──────────────────────────────────────────────────────────────┘
+```
+
+## Framework: Astro 6
+
+Astro 6 es el núcleo del sitio, configurado en `astro.config.mjs` como generador de sitios estáticos con adaptador Vercel:
+
+```js
+// astro.config.mjs
+import { defineConfig } from "astro/config";
+import tailwindcss from "@tailwindcss/vite";
+import react from "@astrojs/react";
+import vercel from "@astrojs/vercel";
+
+export default defineConfig({
+  site: "https://www.esgmexico.net",
+  trailingSlash: "never",
+  adapter: vercel(),
+  integrations: [react()],
+  vite: {
+    plugins: [tailwindcss()],
+  },
+});
+```
+
+<CardGroup cols={2}>
+  <Card title="site: 'https://www.esgmexico.net'" icon="globe">
+    URL canónica del sitio. Usada por Astro para generar el sitemap XML y las URLs absolutas en metadatos Open Graph.
+  </Card>
+  <Card title="trailingSlash: 'never'" icon="slash">
+    Garantiza que todas las rutas sean sin barra final (`/servicios-esg`, no `/servicios-esg/`), consistente con la configuración de Vercel.
+  </Card>
+  <Card title="adapter: vercel()" icon="triangle">
+    El adaptador `@astrojs/vercel` (v10) genera una salida en `.vercel/output/` compatible con el sistema de archivos y Edge Functions de Vercel.
+  </Card>
+  <Card title="integrations: [react()]" icon="react">
+    `@astrojs/react` habilita componentes React como islands de hidratación selectiva dentro de páginas `.astro`.
+  </Card>
+</CardGroup>
+
+## Sanity CMS Headless
+
+Sanity actúa como CMS headless. El cliente se instancia en `src/lib/sanity.ts` y todas las queries GROQ se ejecutan en tiempo de build:
+
+```ts
+// src/lib/sanity.ts
+import { createClient } from '@sanity/client'
+
+export const sanity = createClient({
+  projectId: import.meta.env.PUBLIC_SANITY_PROJECT_ID,
+  dataset:   import.meta.env.PUBLIC_SANITY_DATASET ?? 'production',
+  apiVersion: '2024-01-01',
+  useCdn: true,
+})
+```
+
+### Schemas del Studio
+
+El Studio (`studio/sanity.config.ts`) expone cuatro tipos de documento:
+
+<CardGroup cols={2}>
+  <Card title="blogPost" icon="pen-line">
+    Artículos del blog. Campos: `title`, `slug`, `author` (ref), `date`, `category`, `tags` (ref[]), `featured`, `coverImage`, `excerpt`, `body` (Portable Text), `readingTime`. Categorías: Estrategia ESG, Regulación y Cumplimiento, Reportes y Estándares, Sostenibilidad Financiera, Fundaciones, Casos y Tendencias.
+  </Card>
+  <Card title="noticia" icon="newspaper">
+    Noticias del sector ESG. Documento independiente de `blogPost` con su propio listado en el Studio bajo "📰 Noticias".
+  </Card>
+  <Card title="author" icon="circle-user">
+    Autoras de los artículos. Referenciado desde `blogPost.author`. El Studio lo muestra bajo "👤 Autoras".
+  </Card>
+  <Card title="tag" icon="tag">
+    Etiquetas reutilizables. Referenciadas como array desde `blogPost.tags`. El Studio los muestra bajo "🏷️ Etiquetas".
+  </Card>
+</CardGroup>
+
+### Helpers de Imagen
+
+`src/lib/sanity.ts` exporta tres utilidades para optimizar imágenes desde el CDN de Sanity:
+
+```ts
+// Aplica parámetros del Sanity Image Pipeline a una URL del CDN
+export function sanityImg(
+  url: string | undefined,
+  opts: { w: number; h?: number; q?: number } = { w: 640 },
+): string {
+  if (!url || !url.includes('cdn.sanity.io')) return url ?? ''
+  const params = new URLSearchParams()
+  params.set('w', String(opts.w))
+  if (opts.h) {
+    params.set('h', String(opts.h))
+    params.set('fit', 'crop')
+  }
+  params.set('auto', 'format')
+  params.set('q', String(opts.q ?? 75))
+  return `${url}${url.includes('?') ? '&' : '?'}${params.toString()}`
+}
+
+// srcset con múltiples anchos para imágenes responsivas
+export function sanitySrcset(
+  url: string | undefined,
+  widths: number[] = [400, 640, 960],
+): string {
+  if (!url || !url.includes('cdn.sanity.io')) return ''
+  return widths.map((w) => `${sanityImg(url, { w })} ${w}w`).join(', ')
+}
+
+// Convierte una referencia de imagen Sanity (image-HASH-WxH-ext) a URL pública
+export function imageUrl(ref: string | undefined): string {
+  if (!ref) return ''
+  const projectId = import.meta.env.PUBLIC_SANITY_PROJECT_ID
+  const dataset   = import.meta.env.PUBLIC_SANITY_DATASET ?? 'production'
+  const [, id, dims, ext] = ref.split('-')
+  return `https://cdn.sanity.io/images/${projectId}/${dataset}/${id}-${dims}.${ext}`
+}
+```
+
+## Estructura de Páginas
+
+Todas las rutas se definen en `src/pages/`. Astro convierte cada archivo `.astro` en una ruta estática durante el build:
+
+<Tabs>
+  <Tab title="Páginas Principales">
+    | Ruta | Archivo | Descripción |
+    |------|---------|-------------|
+    | `/` | `index.astro` | Home con hero, stats, servicios y estándares |
+    | `/nosotros` | `nosotros.astro` | Equipo directivo, pilares y casos de éxito |
+    | `/servicios-esg` | `servicios-esg.astro` | Los tres pilares E, S y G con detalle |
+    | `/cumplimiento-regulatorio` | `cumplimiento-regulatorio/index.astro` | NOM-035, ISO 14001, ISO 26000 |
+    | `/cumplimiento-regulatorio/nom-035` | `cumplimiento-regulatorio/nom-035.astro` | Página específica NOM-035 |
+    | `/sostenibilidad-financiera` | `sostenibilidad-financiera.astro` | IFRS S1/S2, bonos sostenibles |
+    | `/fundaciones-empresariales` | `fundaciones-empresariales.astro` | Constitución de fundaciones |
+    | `/contacto` | `contacto.astro` | Formulario de contacto |
+    | `/aviso-de-privacidad` | `aviso-de-privacidad.astro` | Aviso legal |
+    | `/terminos-y-condiciones` | `terminos-y-condiciones.astro` | Términos legales |
+  </Tab>
+  <Tab title="Blog y Noticias">
+    | Ruta | Archivo | Descripción |
+    |------|---------|-------------|
+    | `/blog` | `blog/index.astro` | Listado de artículos del blog |
+    | `/blog/[slug]` | `blog/[slug].astro` | Artículo individual (ruta dinámica) |
+    | `/noticias` | `noticias/index.astro` | Listado de noticias del sector |
+  </Tab>
+  <Tab title="API Endpoints">
+    | Ruta | Archivo | Descripción |
+    |------|---------|-------------|
+    | `POST /api/autoevaluacion` | `api/autoevaluacion.ts` | Envía resultados por correo via nodemailer + SMTP |
+    | `/sitemap.xml` | `sitemap.xml.ts` | Sitemap generado dinámicamente |
+  </Tab>
+</Tabs>
+
+## Colecciones de Contenido Local
+
+Además del contenido gestionado en Sanity, el sitio utiliza colecciones de Astro Content Collections para archivos locales:
+
+```
+src/content/
+├── config.ts          # Define las colecciones con Zod schemas
+├── blog/              # Artículos en Markdown (.md)
+│   ├── abril.md
+│   ├── abril2024_Politica_Gobierno.md
+│   ├── diciembre2023_Carbono.md
+│   └── ...
+└── noticias/          # Noticias en JSON
+    ├── adaptacion-estrategica-cfo.json
+    ├── impuesto-carbono-mexico.json
+    ├── semarnat-requisitos-2026.json
+    └── ...
+```
+
+<Note>
+  Los artículos en `src/content/blog/` son archivos Markdown locales, mientras que los gestionados a través de Sanity Studio se consumen vía GROQ en tiempo de build. Ambas fuentes pueden convivir en el listado `/blog`.
+</Note>
+
+## Estilos: TailwindCSS 4
+
+TailwindCSS 4 se integra a través del plugin oficial de Vite, declarado en `astro.config.mjs`:
+
+```js
+import tailwindcss from "@tailwindcss/vite";
+
+// En vite.plugins:
+plugins: [tailwindcss()]
+```
+
+El plugin `@tailwindcss/typography` está disponible para el renderizado de contenido Portable Text del blog. La tipografía principal usa **Plus Jakarta Sans** (headings) e **Inter** (cuerpo), cargadas desde Google Fonts en el `<head>` de `Layout.astro`.
+
+## Componentes y Layout
+
+### Layout Principal
+
+`src/layouts/Layout.astro` es el shell HTML compartido por todas las páginas. Acepta estas props:
+
+```ts
+interface Props {
+  title: string;
+  description: string;
+  canonical?: string;
+  ogImage?: string;
+  noindex?: boolean;
+  ogType?: string;
+  articlePublishedTime?: string;
+  articleAuthor?: string;
+  waMessage?: string;  // Mensaje pre-cargado para el FAB de WhatsApp
+}
+```
+
+Internamente monta los componentes globales en este orden:
+
+```
+<html lang="es">
+  <head>
+    <SEO />       ← meta tags, OG, canonical
+    <Analytics /> ← GTM (GTM-NW8M7NXX) + script de analytics
+  </head>
+  <body>
+    <Header />      ← nav fija, 68px de alto
+    <main>
+      <slot />      ← contenido de la página
+    </main>
+    <Footer />
+    <WhatsAppFAB /> ← botón flotante con mensaje contextual
+  </body>
+</html>
+```
+
+### Catálogo de Componentes
+
+<CardGroup cols={2}>
+  <Card title="Header.astro" icon="panel-top">
+    Navegación fija con fondo `#002451`. Incluye links a las 8 secciones principales, CTA de WhatsApp y menú hamburguesa para móvil. Marca el enlace activo comparando `Astro.url.pathname`.
+  </Card>
+  <Card title="Footer.astro" icon="panel-bottom">
+    4 columnas: Marca (Ugarte HRS y Asociados S.C.), Servicios, Recursos y Contacto. Incluye formulario de newsletter y ofuscación de email por JavaScript para evitar bots.
+  </Card>
+  <Card title="SEO.astro" icon="search">
+    Genera `<title>`, `<meta description>`, tags Open Graph, canonical y `noindex`. Recibe props del Layout.
+  </Card>
+  <Card title="WhatsAppFAB.astro" icon="message-circle">
+    Botón flotante de WhatsApp con número `+52 1 55 1844 5767`. El mensaje pre-cargado varía por página a través de la prop `waMessage` del Layout.
+  </Card>
+  <Card title="Analytics.astro" icon="chart-bar">
+    Inyecta el snippet de Google Tag Manager con el contenedor `GTM-NW8M7NXX` en el `<head>` de todas las páginas.
+  </Card>
+</CardGroup>
+
+## API Endpoint: POST /api/autoevaluacion
+
+El único endpoint SSR del sitio procesa el formulario de autoevaluación ESG y envía los resultados por correo electrónico:
+
+```
+src/pages/api/autoevaluacion.ts
+  └── POST handler
+        ├── Parsea el body del formulario
+        ├── Crea un transporte nodemailer con SMTP de Google Workspace
+        │     HOST: smtp.gmail.com  PORT: 587  (STARTTLS)
+        │     USER: $SMTP_USER  PASS: $SMTP_PASS (contraseña de aplicación)
+        └── Envía el correo a buzon@esgmexico.net
+```
+
+<Warning>
+  `SMTP_PASS` debe ser una **contraseña de aplicación** generada desde la configuración de seguridad de Google Workspace, no la contraseña de la cuenta. Requiere que la verificación en 2 pasos esté activada en `buzon@esgmexico.net`.
+</Warning>
+
+## CI/CD y Deploy Automático
+
+El flujo de integración y entrega continua conecta Sanity con Vercel:
+
+<Steps>
+  <Step title="Publicación en Sanity Studio">
+    Un editor publica o edita un `blogPost` o `noticia` en el Studio.
+  </Step>
+  <Step title="Deploy Hook de Vercel">
+    El Studio dispara un `POST` a `VERCEL_DEPLOY_HOOK_URL`. Este hook está configurado en Vercel bajo **Settings → Git → Deploy Hooks**.
+  </Step>
+  <Step title="Build en Vercel">
+    Vercel ejecuta `astro build`. Astro consulta la API de Sanity (con `useCdn: true` y `apiVersion: '2024-01-01'`), genera todas las páginas estáticas y compila el endpoint SSR.
+  </Step>
+  <Step title="Deploy Atómico">
+    Vercel despliega el nuevo build de forma atómica. Si el build falla, el deploy anterior sigue activo sin interrupción.
+  </Step>
+</Steps>
+
+## Dependencias Clave
+
+```json
+{
+  "dependencies": {
+    "astro":              "^6.4.6",
+    "@astrojs/react":     "^5.0.7",
+    "@astrojs/vercel":    "^10.0.8",
+    "tailwindcss":        "^4.3.1",
+    "@tailwindcss/vite":  "^4.3.1",
+    "react":              "^19.2.7",
+    "react-dom":          "^19.2.7",
+    "nodemailer":         "^9.0.1",
+    "@portabletext/to-html": "^5.0.2"
+  },
+  "devDependencies": {
+    "@sanity/client":        "^7.23.0",
+    "sanity":                "^6.1.0",
+    "@portabletext/react":   "^6.2.0"
+  }
+}
+```
+
+<Tip>
+  `@sanity/client` y `sanity` están en `devDependencies` porque solo se usan en tiempo de build. En producción, Vercel Edge solo sirve el HTML estático generado y la función del endpoint `/api/autoevaluacion`.
+</Tip>

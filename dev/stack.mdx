@@ -1,0 +1,111 @@
+---
+title: "Stack Técnico: Astro 6, Sanity CMS y Vercel"
+sidebarTitle: "Stack"
+description: "Stack completo del sitio web de ESG México: Astro 6 con SSG, TailwindCSS 4, React 19, Sanity CMS headless, adaptador Vercel y Node >=22.12.0."
+---
+
+El sitio web de ESG México está construido sobre un stack moderno centrado en rendimiento y contenido editorial. Astro 6 genera páginas estáticas que se despliegan en Vercel; el contenido vive en Sanity CMS como fuente única de verdad; TailwindCSS 4 gestiona los estilos mediante el plugin de Vite; y React 19 potencia los componentes interactivos (formularios, carruseles). El motor de Node requerido es `>=22.12.0` — versiones anteriores no son compatibles.
+
+## Dependencias principales
+
+<CardGroup cols={2}>
+  <Card title="Framework" icon="rocket">
+    **astro** `^6.4.6` — generación estática y adaptador Vercel.  
+    **@astrojs/react** `^5.0.7` — integración de React en islas.  
+    **@astrojs/vercel** `^10.0.8` — adapter para despliegue serverless.
+  </Card>
+  <Card title="Estilos" icon="paintbrush">
+    **tailwindcss** `^4.3.1` — CSS utility-first vía plugin Vite.  
+    **@tailwindcss/vite** `^4.3.1` — integración con el bundler.  
+    **@tailwindcss/typography** `^0.5.20` — estilos para cuerpo de artículos.
+  </Card>
+  <Card title="CMS y Contenido" icon="database">
+    **@sanity/client** `^7.23.0` — cliente headless para queries GROQ.  
+    **sanity** `^6.1.0` — Sanity Studio (devDependency).  
+    **@portabletext/to-html** `^5.0.2` — serialización de Portable Text.  
+    **@portabletext/react** `^6.2.0` — renderizado en componentes React.
+  </Card>
+  <Card title="Email y React" icon="envelope">
+    **nodemailer** `^9.0.1` — envío SMTP desde `/api/autoevaluacion`.  
+    **react** `^19.2.7` + **react-dom** `^19.2.7` — UI interactiva.  
+    **@types/nodemailer** `^8.0.1` — tipos TypeScript para nodemailer.
+  </Card>
+</CardGroup>
+
+## Configuración de Astro
+
+El archivo `astro.config.mjs` define el sitio canónico, desactiva las barras finales, conecta el adaptador de Vercel y carga TailwindCSS como plugin de Vite — evitando el paso de PostCSS tradicional.
+
+```js title="astro.config.mjs"
+// @ts-check
+import { defineConfig } from "astro/config";
+import tailwindcss from "@tailwindcss/vite";
+import react from "@astrojs/react";
+import vercel from "@astrojs/vercel";
+
+export default defineConfig({
+  site: "https://www.esgmexico.net",
+  trailingSlash: "never",
+  adapter: vercel(),
+  integrations: [react()],
+  vite: {
+    plugins: [tailwindcss()],
+  },
+});
+```
+
+<Note>
+  `trailingSlash: "never"` es importante para evitar redirecciones dobles en Vercel y mantener URLs canónicas consistentes en los meta tags de SEO.
+</Note>
+
+## Package.json completo
+
+```json title="package.json"
+{
+  "name": "sitio-web",
+  "type": "module",
+  "version": "0.0.1",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/react": "^5.0.7",
+    "@astrojs/vercel": "^10.0.8",
+    "@portabletext/to-html": "^5.0.2",
+    "@tailwindcss/typography": "^0.5.20",
+    "@tailwindcss/vite": "^4.3.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "astro": "^6.4.6",
+    "nodemailer": "^9.0.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tailwindcss": "^4.3.1"
+  },
+  "devDependencies": {
+    "@portabletext/react": "^6.2.0",
+    "@sanity/client": "^7.23.0",
+    "@types/nodemailer": "^8.0.1",
+    "sanity": "^6.1.0"
+  }
+}
+```
+
+## Flujo de datos
+
+El sitio sigue el patrón **SSG con datos externos**: en tiempo de build, Astro consulta Sanity vía GROQ, genera todas las páginas estáticas y las despliega en la CDN de Vercel. No existe base de datos propia; Sanity es la única fuente de contenido dinámico (artículos, noticias, autoras, etiquetas).
+
+<CardGroup cols={2}>
+  <Card title="Build time" icon="hammer">
+    Astro ejecuta `BLOG_LIST_QUERY` y `NOTICIAS_QUERY` contra Sanity CDN para pre-renderizar todas las rutas en tiempo de compilación.
+  </Card>
+  <Card title="Runtime" icon="bolt">
+    El endpoint `/api/autoevaluacion` corre como función serverless en Vercel y usa `nodemailer` con SMTP de Google Workspace para despachar correos.
+  </Card>
+</CardGroup>

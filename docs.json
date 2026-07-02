@@ -1,72 +1,94 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mintlify Starter Kit",
+  "name": "ESG México",
+  "theme": "willow",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#4c5473"
   },
-  "favicon": "/favicon.svg",
-  "navigation": {
-    "pages": [
-      {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "quickstart"
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
+  "favicon": "https://icons.duckduckgo.com/ip3/esg-mexico.vercel.app.ico",
   "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
+    "light": "https://media.brand.dev/ab0994b0-0ccd-422a-98db-4bec3fb12267.png",
+    "dark": "https://media.brand.dev/ab0994b0-0ccd-422a-98db-4bec3fb12267.png"
   },
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://app.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/ivanespinosa/esg-mexico-sitio-web"
     }
-  },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
-    ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/ivanespinosa/esg-mexico-sitio-web"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentación",
+        "groups": [
+          {
+            "group": "Introducción",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Servicios ESG",
+            "pages": [
+              "servicios/environmental",
+              "servicios/social",
+              "servicios/governance"
+            ]
+          },
+          {
+            "group": "Cumplimiento Regulatorio",
+            "pages": [
+              "cumplimiento/overview",
+              "cumplimiento/nom-035",
+              "cumplimiento/certificaciones"
+            ]
+          },
+          {
+            "group": "Sostenibilidad Financiera",
+            "pages": [
+              "financiero/overview",
+              "financiero/ifrs-s1-s2",
+              "financiero/due-diligence"
+            ]
+          },
+          {
+            "group": "Fundaciones Empresariales",
+            "pages": [
+              "fundaciones/overview",
+              "fundaciones/constitucion",
+              "fundaciones/casos-exito"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Desarrollo",
+        "groups": [
+          {
+            "group": "Stack Técnico",
+            "pages": [
+              "dev/stack",
+              "dev/configuracion",
+              "dev/cms-sanity"
+            ]
+          },
+          {
+            "group": "Despliegue y Operaciones",
+            "pages": [
+              "dev/deploy",
+              "dev/seo-auditoria",
+              "dev/variables-entorno"
+            ]
+          }
+        ]
+      }
+    ]
   }
 }
