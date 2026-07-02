@@ -50,7 +50,7 @@ export default defineConfig({
   <Step title="Configurar dominios">
     En **Settings → Domains**, agrega ambos:
     - `www.esgmexico.net` — dominio principal (sirve el sitio)
-    - `esgmexico.net` — dominio adicional configurado como redirect 301 a `www` (ver sección de `vercel.json` más abajo)
+    - `esgmexico.net` — dominio adicional configurado como redirect permanente a `www` vía `vercel.json` (ver sección más abajo)
 
     Vercel emite y renueva los certificados TLS automáticamente para ambos.
   </Step>
@@ -122,8 +122,8 @@ El archivo `vercel.json` define dos responsabilidades: consolidar el tráfico no
 </CodeGroup>
 
 <CardGroup cols={2}>
-  <Card title="Redirect 301 no-www → www" icon="arrow-right">
-    La condición `has.type: host` captura únicamente peticiones al host `esgmexico.net` y las redirige a `https://www.esgmexico.net/:path*`, preservando la ruta y los query params. `permanent: true` emite un código 308.
+  <Card title="Redirect 308 no-www → www" icon="arrow-right">
+    La condición `has.type: host` captura únicamente peticiones al host `esgmexico.net` y las redirige a `https://www.esgmexico.net/:path*`, preservando la ruta y los query params. `permanent: true` emite un **308 Permanent Redirect** (el código que Vercel usa para redirects permanentes).
   </Card>
   <Card title="HSTS con preload" icon="lock">
     `max-age=63072000` (2 años) con `includeSubDomains; preload` indica a los navegadores que el sitio solo debe cargarse por HTTPS y lo registra en la lista de preload de los navegadores.
@@ -247,6 +247,11 @@ export const POST: APIRoute = async ({ request, redirect }) => {
   if (formData.get("botcheck")) {
     return redirect("/servicios-esg?enviado=1#autoevaluacion", 303);
   }
+
+  const filas = Array.from(formData.entries())
+    .filter(([key]) => key !== "botcheck")
+    .map(([key, value]) => `<tr><td style="padding:4px 12px;color:#43474f;font-size:13px;">${key}</td><td style="padding:4px 12px;font-size:13px;">${value}</td></tr>`)
+    .join("");
 
   const transporter = nodemailer.createTransport({
     host: "smtp.gmail.com",

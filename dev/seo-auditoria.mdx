@@ -205,7 +205,10 @@ El sitio migró correctamente a Astro con generación estática (HTML completo s
     ```ts
     // src/lib/sanity.ts — funciones de imagen ya disponibles
 
-    /** Aplica transformaciones del Sanity Image Pipeline a una URL del CDN */
+    /**
+     * Aplica transformaciones del Sanity Image Pipeline a una URL del CDN.
+     * URLs que no son de cdn.sanity.io se devuelven sin tocar.
+     */
     export function sanityImg(
       url: string | undefined,
       opts: { w: number; h?: number; q?: number } = { w: 640 }
@@ -217,12 +220,12 @@ El sitio migró correctamente a Astro con generación estática (HTML completo s
         params.set("h", String(opts.h));
         params.set("fit", "crop");
       }
-      params.set("auto", "format"); // convierte a WebP/AVIF según soporte del navegador
+      params.set("auto", "format");
       params.set("q", String(opts.q ?? 75));
       return `${url}${url.includes("?") ? "&" : "?"}${params.toString()}`;
     }
 
-    /** srcset con varios anchos para imágenes responsivas */
+    /** srcset con varios anchos para imágenes responsivas de Sanity */
     export function sanitySrcset(
       url: string | undefined,
       widths: number[] = [400, 640, 960]
@@ -336,7 +339,7 @@ El sitio migró correctamente a Astro con generación estática (HTML completo s
 
       // Excerpts migrados vienen auto-truncados a media palabra (sin puntuación final).
       // En ese caso, el cuerpo completo da una descripción más limpia.
-      const looksTruncated = source !== "" && !/[.!?…»)]$/.test(source);
+      const looksTruncated = source !== "" && !/[.!?…»")]$/.test(source);
       if (!source || looksTruncated) {
         const fromBody = stripTitle(clean(toPlainText(post.body)));
         if (fromBody) source = fromBody;

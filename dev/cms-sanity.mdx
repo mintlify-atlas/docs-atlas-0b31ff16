@@ -1,7 +1,7 @@
 ---
-title: "Sanity CMS: Esquemas de Contenido y GROQ Queries"
+title: "Sanity CMS: Esquemas, Queries GROQ y Funciones de Imagen"
 sidebarTitle: "Sanity CMS"
-description: "Guía del CMS Sanity headless: esquemas blogPost, noticia, author y tag, queries GROQ desde src/lib/queries.ts, y funciones de imagen sanityImg/sanitySrcset."
+description: "Guía completa del CMS Sanity: esquemas blogPost, noticia, author y tag, queries GROQ de queries.ts, y funciones sanityImg/sanitySrcset/imageUrl."
 ---
 
 Sanity actúa como la fuente única de verdad para todo el contenido editorial del sitio: artículos del blog, noticias, autoras y etiquetas. El sitio consume Sanity a través de su API CDN usando el cliente oficial `@sanity/client`; el contenido se obtiene en tiempo de build mediante queries GROQ y se pre-renderiza como HTML estático. El Sanity Studio —incluido en la carpeta `studio/`— es la interfaz de edición para el equipo de contenido.
@@ -45,8 +45,8 @@ export function sanityImg(
     params.set('h', String(opts.h))
     params.set('fit', 'crop')
   }
-  params.set('auto', 'format')          // WebP/AVIF según soporte del navegador
-  params.set('q', String(opts.q ?? 75)) // Calidad por defecto: 75
+  params.set('auto', 'format')
+  params.set('q', String(opts.q ?? 75))
   return `${url}${url.includes('?') ? '&' : '?'}${params.toString()}`
 }
 ```
@@ -137,7 +137,7 @@ El Sanity Studio define cuatro tipos de documentos. A continuación se describe 
       type: 'document',
       fields: [
         { name: 'title',       type: 'string', /* required */ },
-        { name: 'slug',        type: 'slug',   /* source: title, max:96 */ },
+        { name: 'slug',        type: 'slug',   /* source: title, max:96, required */ },
         { name: 'date',        type: 'date',   /* required */ },
         { name: 'category',    type: 'string', /* radio: Evento | Aparición | Medio | Premio */ },
         { name: 'excerpt',     type: 'text',   /* required */ },
@@ -162,8 +162,8 @@ El Sanity Studio define cuatro tipos de documentos. A continuación se describe 
       type: 'document',
       fields: [
         { name: 'name',      type: 'string', /* required */ },
-        { name: 'slug',      type: 'slug',   /* source: name — ej: ximena-ugarte */ },
-        { name: 'role',      type: 'string', /* placeholder: Directora y Fundadora */ },
+        { name: 'slug',      type: 'slug',   /* source: name, required — ej: ximena-ugarte */ },
+        { name: 'role',      type: 'string', /* placeholder: Directora y Fundadora, ESG México */ },
         { name: 'bio',       type: 'text'   /* semblanza, 4 rows */ },
         { name: 'photo',     type: 'image', /* hotspot */ },
         { name: 'signature', type: 'image', /* PNG con fondo blanco */ },
@@ -184,7 +184,7 @@ El Sanity Studio define cuatro tipos de documentos. A continuación se describe 
       type: 'document',
       fields: [
         { name: 'name', type: 'string', /* required */ },
-        { name: 'slug', type: 'slug',   /* source: name, max:96 */ },
+        { name: 'slug', type: 'slug',   /* source: name, max:96, required */ },
       ],
     })
     ```
